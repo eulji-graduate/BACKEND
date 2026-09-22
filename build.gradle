@@ -1,0 +1,297 @@
+plugins {
+	id 'java'
+	id 'org.springframework.boot' version '4.1.0'
+	id 'io.spring.dependency-management' version '1.1.7'
+}
+
+group = 'com.module06'
+version = '0.0.1-SNAPSHOT'
+
+java {
+	toolchain {
+		languageVersion = JavaLanguageVersion.of(17)
+	}
+}
+
+repositories {
+	mavenCentral()
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// 취약점 때문에 BOM 보다 올려 박는 전이 의존성.
+//
+// 둘 다 우리가 직접 적은 것이 아니다 — 남이 끌고 오고, Spring Boot 4.1.0 의 BOM 이
+// 취약한 버전으로 못 박아둔다. BOM 이 정한 값을 property 로 덮어써서 올린다.
+//
+// ⚠️ Spring Boot 를 올릴 때 이 블록을 함께 볼 것. BOM 이 아래 버전 이상을 물어오게 되면
+//    그 줄은 지워야 한다 — 남겨두면 BOM 보다 낮은 버전에 묶어버리는 반대 효과가 난다.
+//
+// 둘 다 Dependency Review 가 잡았다(PR #469, 도입 첫 실행). 목록 기능이 리포에서
+// 꺼져 있던 동안에는 아무도 이것들을 몰랐다.
+// ════════════════════════════════════════════════════════════════════════════
+
+// netty — Bzip2Decoder 의 RLE 상태 기계가 무한 루프에 빠져 이벤트 루프 스레드가 통째로
+// 멈춘다(GHSA-558v-64gr-wgg4, high). BOM 은 4.2.15.Final, 4.2.16.Final 에서 고쳐졌다.
+// 끌고 오는 쪽: AWS SDK 의 netty-nio-client (s3 · transcribe 양쪽).
+ext['netty.version'] = '4.2.16.Final'
+
+// httpcore5 — HTTP/1 헤더 파싱이 메모리를 고갈시켜 DoS 가 된다
+// (GHSA-hf6x-8p5f-cgmf, high). BOM 은 5.4.2, 5.4.3 에서 고쳐졌다.
+// 끌고 오는 쪽: com.anthropic:anthropic-java → anthropic-java-core → httpclient5.
+// 즉 Gate 2 판정용 라이브러리가 데려오는 것이고, implementation 스코프라 런타임에 실린다.
+ext['httpcore5.version'] = '5.4.3'
+
+// jackson — @JsonView·@JsonIgnoreProperties 우회 3건(medium). 감춘 필드가 응답에 섞이거나,
+// 무시하기로 한 입력 필드가 역직렬화에서 먹는다. 우리는 DTO 로 응답을 통제하지만
+// @JsonView 를 쓰기 시작하는 순간 실제 유출 경로가 된다.
+//   2.x — GHSA 3건(우회: @JsonUnwrapped 컨테이너 · EXTERNAL_PROPERTY 크리에이터 · 대소문자 무시)
+//   3.x — 같은 계열 1건
+// BOM 은 2.21.4 / 3.1.4 를 물고 있고, 각각 2.21.5 / 3.1.5 에서 고쳐졌다.
+// 프로퍼티 이름이 헷갈린다 — Spring Boot 4 에서 jackson-bom 이 3.x, jackson-2-bom 이 2.x 다
+// (spring-boot-dependencies-4.1.0.pom 에서 확인). 뒤집어 쓰면 조용히 아무 효과가 없다.
+//
+// Dependabot 경보 #2·#3·#4(2.x) · #5(3.x). 의존성 목록을 제출하기 시작하자 바로 드러났다.
+ext['jackson-2-bom.version'] = '2.21.5'
+ext['jackson-bom.version'] = '3.1.5'
+
+// AWS SDK v2 — S3 프로덕션 어댑터(CapS3ObjectStorageAdapter, presigned PUT/GET) 버전 관리용.
+// 팀 내 첫 AWS SDK 도입이라 기존에 맞출 버전 고정이 없어 새로 잡는다(2026-08 기준 최신 안정판).
+// ⚠️ s3-presigner는 더 이상 별도 아티팩트가 아니다 — S3Presigner가 s3 모듈 안에 번들돼 있다
+//    (software.amazon.awssdk.services.s3.presigner.*, 2.34.0 jar 안에서 실제 확인).
+def awsSdkVersion = '2.34.0'
+
+dependencies {
+	implementation 'org.springframework.boot:spring-boot-starter-actuator'
+
+	// S3 presigned URL 발급(PUT/GET) + 삭제. S3Presigner도 이 안에 포함돼 있다.
+	implementation "software.amazon.awssdk:s3:${awsSdkVersion}"
+
+	// AWS Transcribe — STT 잡 제출(STT-03·04). 제출만 이 모듈이고, 결과 JSON은 S3에서 읽으므로
+	// 위 s3 모듈이 함께 필요하다. IAM 롤은 Spring EC2에 있다(AI 서버로 넘기지 않는다).
+	implementation "software.amazon.awssdk:transcribe:${awsSdkVersion}"
+
+	implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+    implementation 'org.springframework.boot:spring-boot-starter-data-redis'
+	implementation 'org.springframework.boot:spring-boot-starter-flyway'
+
+	implementation 'org.springframework.boot:spring-boot-starter-mail'   // 계정 발급 시 비밀번호 메일 발송
+
+	implementation 'org.springframework.boot:spring-boot-starter-security'
+
+	// JWT — 액세스/리프레시 토큰. 에러 응답을 프로젝트 ErrorResponse 형식으로 직접 제어해야 해서
+	// Spring OAuth2 리소스 서버 대신 jjwt 를 쓴다.
+	implementation 'io.jsonwebtoken:jjwt-api:0.12.6'
+	runtimeOnly 'io.jsonwebtoken:jjwt-impl:0.12.6'
+	runtimeOnly 'io.jsonwebtoken:jjwt-jackson:0.12.6'
+
+	implementation 'org.springframework.boot:spring-boot-starter-validation'
+	implementation 'org.springframework.boot:spring-boot-starter-webmvc'
+    runtimeOnly 'io.micrometer:micrometer-registry-prometheus'
+
+	// Swagger(OpenAPI) 문서화 — CLAUDE.md 0절 6항/5절, 구현과 같은 PR에서 @Tag/@Operation 사용 (이슈 #31)
+	implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:3.0.3'
+
+	implementation 'org.flywaydb:flyway-mysql'
+
+	// databind는 webmvc가 끌어오나 jsr310 datatype은 별도라 명시 고정(팀 컨벤션).
+	// 인수인계 인사이트 스냅샷(JSON payload) 직렬화에 JavaTimeModule 필요.
+	implementation 'com.fasterxml.jackson.datatype:jackson-datatype-jsr310'
+
+	compileOnly 'org.projectlombok:lombok'
+	developmentOnly 'org.springframework.boot:spring-boot-devtools'
+
+
+	runtimeOnly 'com.mysql:mysql-connector-j'
+	testRuntimeOnly 'com.h2database:h2'
+	annotationProcessor 'org.projectlombok:lombok'
+	testImplementation 'org.springframework.boot:spring-boot-starter-actuator-test'
+
+	testImplementation 'org.springframework.boot:spring-boot-starter-security-test'
+	testImplementation 'org.springframework.boot:spring-boot-starter-validation-test'
+	testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'
+	testCompileOnly 'org.projectlombok:lombok'
+	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+	testAnnotationProcessor 'org.projectlombok:lombok'
+
+	// 스키마 검증 CI(migrationCheck) — 실제 MySQL에 Flyway를 적용해 ddl-auto=validate로 정합성 확인.
+	// spring-boot-testcontainers는 Spring Boot BOM이 버전 관리하지만, testcontainers 개별 모듈
+	// (junit-jupiter/mysql)은 관리 대상이 아니라 testcontainers-bom을 직접 임포트해 버전을 맞춘다.
+	testImplementation 'org.springframework.boot:spring-boot-testcontainers'
+	testImplementation platform('org.testcontainers:testcontainers-bom:1.21.4')
+	testImplementation 'org.testcontainers:junit-jupiter'
+	testImplementation 'org.testcontainers:mysql'
+
+	// ── AI 코드 리뷰 루프 (reviewloop.judge.*) 의존성 ──
+	// 순수 Java CLI라 Spring과 무관. jackson은 webmvc가, snakeyaml은 spring-boot가 끌어오지만 명시 고정.
+	implementation 'org.yaml:snakeyaml'                       // rules.yaml 파싱(RuleCatalog)
+	// Gate 2 Claude judge(선택 어댑터). Gemini만 쓰면 미사용.
+	// swagger-annotations(non-jakarta, 2.2.31)를 딸려오는데 springdoc이 쓰는
+	// swagger-annotations-jakarta(2.2.47)와 같은 패키지(io.swagger.v3.oas.annotations)를 다르게 제공해서
+	// 클래스로더가 구버전을 집으면 NoSuchMethodError($dynamicRef)로 /v3/api-docs가 500 난다. 제외해서 방지.
+	implementation('com.anthropic:anthropic-java:2.34.0') {
+		exclude group: 'io.swagger.core.v3', module: 'swagger-annotations'
+	}
+	testImplementation 'org.springframework.boot:spring-boot-starter-test'  // 루프 유닛테스트 JUnit Jupiter
+	// Gate 1(결정론 하드 게이트) — ARCH_001~003을 ArchitectureRulesTest가 집행한다.
+	// pre-push 훅이 그 테스트의 존재를 검사해 자동 활성화하므로, 이 의존성이 곧 Gate 1의 스위치다.
+	testImplementation 'com.tngtech.archunit:archunit-junit5:1.3.0'
+}
+
+tasks.named('test') {
+	// 힙 설정은 여기 두지 않는다 — 아래 tasks.withType(Test) 가 test 를 포함해 일괄로 잡는다.
+	// 양쪽에 두면 값이 갈렸을 때 어느 쪽이 이기는지 읽는 사람이 알 수 없다.
+	useJUnitPlatform {
+		excludeTags 'migration'
+	}
+}
+
+tasks.withType(Test).configureEach {
+	// 테스트 JVM 힙. Gradle 의 Test 기본값은 512m 인데, 이 스위트에는 부족하다.
+	// 스프링은 테스트 컨텍스트를 JVM 안에 캐시해두고 재사용하는데(기본 최대 32개 동시 보유),
+	// 설정이 서로 다른 컨텍스트가 @SpringBootTest 51개 + @WebMvcTest 16개만큼 있어서
+	// 캐시가 512m 를 넘긴다. 실제로 CI 와 로컬 양쪽에서 OutOfMemoryError 가 났고,
+	// ProjectAttachmentController·ProjectController 테스트 8건이 ApplicationContext 로드
+	// 실패로 떨어졌다(2026-08-11). 터진 자리가 Jackson 빈이라 Jackson 문제로 보이지만,
+	// 그건 하필 그 순간 메모리를 요청한 지점일 뿐 원인이 아니다.
+	// 값 근거: CI 러너(ubuntu-latest)는 16GB, 개발 장비도 그 이상이라 2g 포크는 안전하다.
+	maxHeapSize = '2g'
+
+	// 실패·건너뜀의 "이유"를 CI 로그에 남긴다.
+	// Gradle 기본값은 실패한 테스트를 "IllegalStateException at Xxx.java:32" 한 줄로만 찍어서
+	// 예외 메시지가 사라진다. 실제로 gate2-live-judge 가 5건 실패했는데 HTTP 상태코드가 로그에
+	// 없어서 키 문제인지 쿼터인지 모델 id 인지 판별할 수 없었다(2026-08-05).
+	// skipped 도 함께 찍는다 — 라이브 판정이 왜 건너뛰어졌는지가 그 사유에 담긴다.
+	testLogging {
+		events 'failed', 'skipped'
+		exceptionFormat = 'full'
+		showExceptions = true
+		showCauses = true
+		showStackTraces = true
+	}
+}
+
+// 스키마 검증 CI — Testcontainers로 실제 MySQL을 띄워 Flyway를 적용하고 ddl-auto=validate로
+// 엔티티-스키마 정합성을 확인한다(docs/DB_MIGRATION_RULES.md §11). Docker 필요, 느림 → test와 분리.
+tasks.register('migrationCheck', Test) {
+	group = 'verification'
+	description = 'Flyway 마이그레이션을 실제 MySQL(Testcontainers)에 적용하고 ddl-auto=validate로 엔티티-스키마 정합성을 검증한다. Docker 필요.'
+	useJUnitPlatform {
+		includeTags 'migration'
+	}
+	testClassesDirs = sourceSets.test.output.classesDirs
+	classpath = sourceSets.test.runtimeClasspath
+	shouldRunAfter(test)
+}
+
+// 실수 방어 — 비밀 설정 파일은 프로젝트 루트에 두는 것이 규약이다(application.yaml 주석 참조).
+// 누가 실수로 src/main/resources 아래에 두더라도 jar에는 들어가지 않게 막는다.
+// ⚠️ 이건 부분 방어다: Dockerfile의 `COPY src`는 막지 못한다. 규약대로 루트에 두는 것이 유일한 해법이다.
+tasks.named('processResources') {
+	exclude 'application-secret*.yml', 'application-secret*.yaml'
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// AI 코드 리뷰 루프 — 태스크. mainClass는 com.module06.backend.reviewloop.judge.*
+// 콘솔 한글 깨짐 방지 UTF-8 인자(Windows cp949 대비).
+// 절차: review-loop/DRIVER.md (드라이버 루프) · 설계: review-loop/UNIFIED_DESIGN.md
+// group='review-loop-dormant'인 태스크는 휴면(기본 경로 아님) — UNIFIED_DESIGN §3.4
+// ════════════════════════════════════════════════════════════════════════════
+def reviewLoopUtf8Args = ['-Dfile.encoding=UTF-8',
+                          '-Dsun.stdout.encoding=UTF-8', '-Dsun.stderr.encoding=UTF-8',
+                          '-Dstdout.encoding=UTF-8', '-Dstderr.encoding=UTF-8']
+
+tasks.register('reviewCli', JavaExec) {
+    group = 'review-loop'
+    description = '사람 검토 게이트를 터미널에 표시(개발자 도구 표면)'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'com.module06.backend.reviewloop.judge.ReviewLoopCli'
+    jvmArgs reviewLoopUtf8Args
+}
+
+// 게이트/수동 리뷰 러너 (pre-push 훅이 --files-from --gate 로 호출)
+tasks.register('reviewLoop', JavaExec) {
+    group = 'review-loop'
+    description = '지정 경로/변경파일에 리뷰 루프 실행 (--args="--path <dir> | --files-from <list> [--gate]")'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'com.module06.backend.reviewloop.judge.ReviewLoopRunner'
+    jvmArgs reviewLoopUtf8Args
+}
+
+// 💤 휴면 — 무인 자율 수정 루프. 통합 설계(review-loop/UNIFIED_DESIGN.md §3.4)에서 기본 경로에서 내렸다.
+// 이유: judge·fixer가 모두 Gemini라 자기 승인이다. 기본 절차는 review-loop/DRIVER.md의 드라이버 루프
+//       (판정=reviewLoop · 수정=Claude Code Edit · 검증=scripts/review-verify.sh).
+// 되살릴 때는 judge를 ClaudeJudgeAdapter로 교차시켜 '찾는 주체 ≠ 고치는 주체'를 지킬 것.
+// 판정만 필요하면 이 태스크가 아니라 reviewLoop을 쓴다(P2 판정 일원화 · 구 --dry-run 제거).
+tasks.register('reviewAutoFix', JavaExec) {
+    group = 'review-loop-dormant'
+    description = '[휴면·기본경로 아님] 무인 자율 수정 루프 (--args="--files-from <list> [--rounds-per-file 3] [--global-budget 6]")'
+    // runtimeClasspath(컴파일된 sibling 클래스 = build/classes) + compileClasspath(lombok 등 compileOnly 포함).
+    // CompileVerification의 단일파일 javac가 @Getter 등 lombok을 ServiceLoader로 자동 실행하려면
+    // lombok jar가 실행 JVM classpath(java.class.path)에 있어야 한다. (compileOnly는 resolvable이 아니라 직접 못 씀)
+    classpath = sourceSets.main.runtimeClasspath + sourceSets.main.compileClasspath
+    mainClass = 'com.module06.backend.reviewloop.judge.AutoLoopRunner'
+    jvmArgs reviewLoopUtf8Args
+}
+
+tasks.register('reviewKnowledgeDemo', JavaExec) {
+    group = 'review-loop'
+    description = '지식 축적 예시 생성(error_log·lessons·report.md) → review-loop/logs/demo/ (실제 기록 무영향)'
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.module06.backend.reviewloop.judge.KnowledgeArtifactsGenerator'
+    jvmArgs reviewLoopUtf8Args
+}
+
+tasks.register('reviewLesson', JavaExec) {
+    group = 'review-loop'
+    description = '사람 판정을 교훈으로 기록 (--args="--rule X --kind CONFIRMED|FALSE_POSITIVE|MISSED --note ...")'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'com.module06.backend.reviewloop.judge.ReviewLessonRecorder'
+    jvmArgs reviewLoopUtf8Args
+}
+
+tasks.register('reviewAccuracy', JavaExec) {
+    group = 'review-loop'
+    description = '규칙별 오탐/누락 지목 횟수 집계 (교훈 기반 · 프롬프트 개선 후보 식별)'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'com.module06.backend.reviewloop.judge.RuleAccuracy'
+    jvmArgs reviewLoopUtf8Args
+}
+
+// 최적화 루프 — 코드가 아니라 '루프 자신'을 측정한다(수율·커버리지·학습 전환율 + 돌릴 손잡이).
+// reviewAccuracy(규칙 품질)·review-score-domains.sh(코드 품질)와 대상이 다르다. 설계: UNIFIED_DESIGN.md §9
+tasks.register('reviewOptimize', JavaExec) {
+    group = 'review-loop'
+    description = '루프 자신의 지표 측정·진단 (--args="--snapshot" 이면 기준선에 적재해 다음 실행이 델타 표시)'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'com.module06.backend.reviewloop.judge.LoopMetrics'
+    jvmArgs reviewLoopUtf8Args
+}
+
+tasks.register('reviewBudget', JavaExec) {
+    group = 'review-loop'
+    description = '드라이버 루프 예산 증가·검사 (--args="--inc-autofix | --inc-total | --reset") · 초과 시 exit 1'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'com.module06.backend.reviewloop.judge.DriverBudget'
+    jvmArgs reviewLoopUtf8Args
+    ignoreExitValue = true
+}
+
+tasks.register('installReviewHooks', Exec) {
+    group = 'review-loop'
+    description = 'pre-push 훅 활성화(git config core.hooksPath .githooks)'
+    commandLine 'git', 'config', 'core.hooksPath', '.githooks'
+    doLast { println 'pre-push 훅 활성화됨(.githooks). 우회 필요 시: git push --no-verify' }
+}
+
+tasks.register('reviewFix', Exec) {
+    group = 'review-loop'
+    description = 'Minor 수정 요청서 생성: Gemini 판정 → 방안 포함 요청서 (-Pargs="--path ... | --files-from ...")'
+    commandLine 'bash', 'scripts/review-fix.sh'
+    def a = (project.findProperty('args') ?: '').toString().trim()
+    if (a) { args(a.split(' ')) }
+}
+
+// reviewVerify는 gradle 태스크로 감싸지 않는다 — 태스크가 bash를 부르고 그 bash가 다시 ./gradlew를
+// 부르면 중첩 gradle(프로젝트 락)이다. 드라이버는 gradle 바깥에서 도므로 스크립트를 직접 부른다:
+//   bash scripts/review-verify.sh [--with-test]      # 검증(컴파일 / 커밋 직전 테스트)
+//   bash scripts/review-session.sh                   # (선택) 격리 worktree+브랜치 준비

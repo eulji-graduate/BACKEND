@@ -1,0 +1,384 @@
+package com.module06.backend.capture.application.service;
+
+import java.time.Clock;
+import java.time.Duration;
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
+
+import org.springframework.stereotype.Service;
+
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+
+import com.module06.backend.capture.application.port.out.SttBlockRepository;
+import com.module06.backend.capture.application.port.out.SttBlockRepository.PendingBlock;
+import com.module06.backend.capture.application.event.SttTranscriptCompletedEvent;
+import com.module06.backend.capture.application.port.out.SttCompletionEventPublisher;
+import com.module06.backend.capture.application.port.out.SttGapRepository;
+import com.module06.backend.capture.application.port.out.SttJobResultPort;
+import com.module06.backend.capture.application.port.out.SttJobResultPort.SttJobOutcome;
+import com.module06.backend.capture.application.port.out.TranscriptRepository;
+import com.module06.backend.capture.application.port.out.TranscriptRepository.NewUtterance;
+import com.module06.backend.capture.domain.model.SttBlockStatus;
+import com.module06.backend.capture.domain.model.TranscriptSegmenter;
+import com.module06.backend.capture.domain.model.TranscriptSegmenter.Segment;
+import com.module06.backend.capture.domain.model.TranscriptSegmenter.Word;
+
+/*
+ * 제출해 둔 STT 잡의 결과를 가져와 블록 상태를 옮기고 정본을 적재한다.
+ *
+ * <h2>적재가 DONE 보다 먼저다 — 이 순서가 이 클래스의 요점이다</h2>
+ * 정본을 넣기 전에 블록을 DONE 으로 닫으면 **분석 시작 관문이 통과된다**
+ * (AnalysisOrchestrator 의 미완 블록 검사). 그 순간 분석이 시작되면 앞부분만 있는 정본으로
+ * 요약·배정이 만들어지고 그게 "분석 완료"로 기록된다 — 뒷부분의 할 일은 어디에도 없고
+ * 아무도 그 사실을 모른다. 이 파이프라인에서 가장 위험한 실패 방향이다.
+ *
+ * <h2>블록 하나의 실패가 나머지를 막지 않는다</h2>
+ * 한 주기에 여러 블록을 훑는다. 그중 하나에서 예외가 나면 그 블록만 로그로 남기고 다음으로
+ * 간다 — 워커가 통째로 죽으면 밀린 잡 전부가 그 블록 하나 때문에 영구히 멈춘다.
+ *
+ * <h2>못 읽은 것과 실패한 것을 구분한다</h2>
+ * 제공자를 못 읽었을 때(UNAVAILABLE) 상태를 바꾸지 않는다. 네트워크가 흔들린 것을 실패로
+ * 접으면 정상적으로 돌고 있던 잡이 FAILED 로 닫히고, 사람이 재처리를 눌러 **같은 구간에
+ * 요금이 두 번 나간다.**
+ */
+@Slf4j
+@Service
+@RequiredArgsConstructor
+public class SttResultPollingService {
+
+    /*
+     * 한 주기에 볼 블록 수. 상한이 없으면 밀린 잡이 많을 때 한 주기가 끝나지 않고, fixedDelay
+     * 의 겹침 방어가 의미를 잃는다(TupleVectorSyncScheduler 주석과 같은 이유).
+     */
+    private static final int BATCH_LIMIT = 50;
+
+    /* 제공자가 그 이름의 잡을 모른다. 화면이 이 코드로 문구를 고른다(제공자 메시지가 아니다). */
+    private static final String ERROR_JOB_NOT_FOUND = "JOB_NOT_FOUND";
+
+    /* 제출은 됐다는데 잡 이름이 비어 있다 — 결과를 되짚을 방법이 없는 행이다. */
+    private static final String ERROR_NO_JOB_NAME = "NO_JOB_NAME";
+
+    /*
+     * 제공자를 계속 못 읽어 이 시간을 넘긴 블록은 실패로 닫는다.
+     *
+     * 얼마로 잡나 — 4분짜리 오디오의 Transcribe 잡은 1~2분이면 끝난다. 한 시간짜리 회의의
+     * 블록(10분 오디오)도 여유 있게 이 안에 들어온다. 넘겼다는 것은 **잡이 도는 중이 아니라
+     * 우리가 결과에 닿지 못하는 것**이다.
+     */
+    private static final Duration UNREACHABLE_GIVE_UP_AFTER = Duration.ofMinutes(30);
+
+    /*
+     * 결과에 닿지 못한 채 오래 갇혔다. **일시적 장애가 영구화된 상태**이고, 잡 자체의 실패
+     * (JOB_FAILED)나 잡이 없는 것(JOB_NOT_FOUND)과 원인이 다르므로 코드를 따로 둔다 —
+     * 화면 문구도 다르고, 손댈 곳도 다르다(대개 권한·키·네트워크지 제공자가 아니다).
+     */
+    private static final String ERROR_RESULT_UNREACHABLE = "RESULT_UNREACHABLE";
+
+    private final SttBlockRepository sttBlockRepository;
+    private final SttJobResultPort sttJobResultPort;
+    private final TranscriptRepository transcriptRepository;
+
+    /*
+     * 실패한 구간을 구멍으로 남긴다. FAILED 만 남기면 분배 확정(RVW-05)이 그대로 열려 있고,
+     * 사람은 회의가 온전히 처리된 줄 알고 확정한다 — 그 구간의 할 일은 영구히 사라진다.
+     */
+    private final SttGapRepository sttGapRepository;
+
+    /* 마지막 STT 블록의 성공을 기존 자동 분석 입구에 전달한다. */
+    private final SttCompletionEventPublisher sttCompletionEventPublisher;
+
+    /*
+     * ⚠ 프로젝트 전체에 Clock 빈이 하나뿐이라(MeetingTimeConfiguration#meetingClock, KST)
+     * 타입으로 주입된다. 캡처 전용 Clock 빈을 새로 만들면 안 된다
+     * (ConfirmDistributionService 와 같은 주석).
+     */
+    private final Clock clock;
+
+    /*
+     * 한 주기 돈다.
+     *
+     * @return 이번에 끝맺은 블록 수(DONE 또는 FAILED). 아직 도는 블록은 세지 않는다 —
+     *         "몇 건이 진행 중인가"는 CAP-06 이 답하는 값이고, 워커 로그는 변화만 남긴다
+     */
+    public int pollOnce() {
+        List<PendingBlock> blocks = sttBlockRepository.findUnfinished(BATCH_LIMIT);
+        if (blocks.isEmpty()) {
+            return 0;
+        }
+
+        int settled = 0;
+        for (PendingBlock block : blocks) {
+            try {
+                if (settle(block)) {
+                    settled++;
+                }
+            } catch (RuntimeException e) {
+                // 이 블록만 남기고 넘어간다 — 워커가 죽으면 밀린 잡 전부가 함께 멈춘다.
+                log.error("STT 결과 처리 실패 — meetingId={} blockSeq={} job={}",
+                        block.meetingId(), block.blockSeq(), block.providerJobName(), e);
+            }
+        }
+        return settled;
+    }
+
+    /* @return 이 블록을 끝맺었으면 true */
+    private boolean settle(PendingBlock block) {
+        /*
+         * 아직 제출하지 않은 블록이다. 실패로 닫지 않는다 — 제출하는 쪽이 곧 QUEUED 로 옮길
+         * 자리이고, 여기서 FAILED 로 만들면 사람이 재처리를 눌러야 제출이 시작된다.
+         * (지금은 PENDING 을 만드는 경로가 없지만, 상태가 있으니 여기서 뜻을 정해 둔다.)
+         */
+        if (block.status() == SttBlockStatus.PENDING) {
+            return false;
+        }
+
+        if (block.providerJobName() == null || block.providerJobName().isBlank()) {
+            log.error("잡 이름이 없는 블록 — 결과를 되짚을 수 없다. meetingId={} blockSeq={}",
+                    block.meetingId(), block.blockSeq());
+            return sttBlockRepository.markFailed(block.id(), ERROR_NO_JOB_NAME);
+        }
+
+        SttJobOutcome outcome = sttJobResultPort.fetch(block.providerJobName());
+        return switch (outcome.state()) {
+            case QUEUED -> false;
+            case RUNNING -> {
+                // 전이 실패는 정상이다 — 그 사이 사람이 재처리를 눌러 QUEUED 로 되돌렸을 수 있다.
+                sttBlockRepository.markRunning(block.id());
+                yield false;
+            }
+            case COMPLETED -> {
+                /*
+                 * duration 복구 — **적재보다 먼저.** 수동 업로드(CAP-10)는 길이를 모른 채
+                 * 블록이 만들어지고(WHOLE_FILE · endOffsetMs=0), 그 0 이 남아 있으면 CAP-06 의
+                 * 남은 시간 추정이 이 블록을 "오디오 0초"로 세어 비율이 망가진다.
+                 *
+                 * 이미 구간이 있는 블록(자동 트리거)은 저장소가 덮지 않는다.
+                 */
+                recoverSpanIfUnknown(block, outcome.words());
+                loadTranscript(block, outcome.words());
+                boolean closed = sttBlockRepository.markDone(block.id());
+                /*
+                 * 이 블록에 남아 있던 받아쓰기 구멍을 지운다 — **재처리가 성공한 경우다.**
+                 * 이게 없으면 한 번 실패한 블록은 나중에 성공해도 구멍이 남아 분배가 영구히
+                 * 막히고, 사람은 STT-03 에서 DONE 을 보면서 "왜 확정이 안 되지"를 묻게 된다.
+                 */
+                if (closed) {
+                    sttGapRepository.clearSttFailureGap(block.meetingId(), block.blockSeq());
+                    publishCompletionWhenAllBlocksDone(block.meetingId());
+                }
+                yield closed;
+            }
+            case FAILED -> {
+                log.warn("STT 실패 — meetingId={} blockSeq={} job={} 사유={}",
+                        block.meetingId(), block.blockSeq(), block.providerJobName(), outcome.errorCode());
+                yield failWithGap(block, outcome.errorCode());
+            }
+            /*
+             * 제공자가 그 이름을 모른다. **실패로 닫는다** — 우리만 QUEUED 로 남은 상태이고
+             * (제출 응답을 못 받았거나 보관 기간이 지났다) 그대로 두면 영원히 안 움직인다.
+             * FAILED 가 되어야 STT-04 의 대상이 되고, 사람이 새 이름으로 다시 제출할 수 있다.
+             */
+            case UNKNOWN -> {
+                log.warn("제공자가 모르는 잡 — 우리 상태와 어긋났다. meetingId={} blockSeq={} job={}",
+                        block.meetingId(), block.blockSeq(), block.providerJobName());
+                yield failWithGap(block, ERROR_JOB_NOT_FOUND);
+            }
+            /*
+             * 네트워크·권한 문제다. 상태를 바꾸지 않고 다음 주기에 다시 본다 — 흔들린 것을
+             * 실패로 접으면 정상적으로 돌던 잡이 FAILED 로 닫히고 같은 구간에 요금이 두 번 난다.
+             *
+             * <h2>다만 영원히 기다리지는 않는다 (2026-08-15)</h2>
+             * 예전에는 이 분기가 그냥 false 였다. 그래서 **일시적 장애가 영구화되면 블록이
+             * QUEUED 에 영원히 갇혔다** — 15초마다 같은 실패를 반복하는데 상태는 그대로라,
+             * DB 만 보면 "STT 진행 중"으로 읽힌다. 회의 15 가 그랬고, 그 위의 분석은 미완료
+             * 블록 때문에 시작하지 않으니 **회의가 통째로 멈춘 채 아무도 모르는** 상태가 됐다.
+             *
+             * 바로 위 UNKNOWN 분기가 같은 판단을 이미 하고 있다 — "그대로 두면 영원히 안
+             * 움직인다. FAILED 가 되어야 STT-04 의 대상이 되고 사람이 다시 제출할 수 있다."
+             * 못 읽는 상태가 30분을 넘겼다면 그것도 같은 처지다.
+             *
+             * 실패로 닫으면 구멍(stt_gap)이 남아 분배 확정이 막히고, "요약이 중단된 회의"에
+             * 올라오며, 사람이 재처리를 누를 수 있다. **셋 다 지금은 일어나지 않는다.**
+             */
+            case UNAVAILABLE -> giveUpIfUnreachableTooLong(block);
+        };
+    }
+
+    /*
+     * 결과에 못 닿은 채 너무 오래 갇힌 블록을 실패로 닫는다.
+     *
+     * @return 이 블록을 끝맺었으면 true. 아직 기다릴 만하면 false 로 다음 주기에 다시 본다
+     */
+    private boolean giveUpIfUnreachableTooLong(PendingBlock block) {
+        if (block.createdAt() == null) {
+            /*
+             * 기준이 없으면 포기하지 않는다. created_at 은 NOT NULL 이라 정상 경로에서는 올 수
+             * 없는 값이고, 여기서 추측해 닫으면 멀쩡한 잡을 실패로 만든다.
+             */
+            log.warn("STT 결과에 닿지 못했는데 제출 시각이 없어 판정을 미룬다 — meetingId={} blockSeq={}",
+                    block.meetingId(), block.blockSeq());
+            return false;
+        }
+
+        Duration stuck = Duration.between(block.createdAt(), LocalDateTime.now(clock));
+        if (stuck.compareTo(UNREACHABLE_GIVE_UP_AFTER) < 0) {
+            return false;
+        }
+
+        /*
+         * ERROR 로 남긴다. 그동안 매 주기 찍힌 WARN 은 15초마다 같은 줄이 반복돼 아무도 안 보는
+         * 종류였다 — 포기하는 순간은 한 번뿐이고, 그 한 줄이 조사의 출발점이 되어야 한다.
+         */
+        log.error("STT 결과에 {}분째 닿지 못해 실패로 닫는다 — 잡은 끝났는데 결과를 못 읽는 상태다."
+                        + " 권한·키·네트워크를 본다. meetingId={} blockSeq={} job={}",
+                stuck.toMinutes(), block.meetingId(), block.blockSeq(), block.providerJobName());
+        return failWithGap(block, ERROR_RESULT_UNREACHABLE);
+    }
+
+    /* FAILED 를 포함한 모든 상태를 확인해 전부 DONE 일 때만 한 번 발행한다. */
+    private void publishCompletionWhenAllBlocksDone(long meetingId) {
+        if (!sttBlockRepository.areAllDone(meetingId)) {
+            return;
+        }
+        sttCompletionEventPublisher.publish(new SttTranscriptCompletedEvent(meetingId));
+        log.info("회의 STT 전체 완료 — 자동 분석 신호 발행. meetingId={}", meetingId);
+    }
+
+    /*
+     * 길이를 모르는 블록의 끝을 인식 결과로 채운다.
+     *
+     * 마지막 단어의 끝 시각이 곧 그 오디오의 길이다. 제공자가 duration 을 따로 주지 않으므로
+     * 이것이 우리가 얻을 수 있는 유일한 실측이다.
+     *
+     * ⚠ 오프셋은 **블록 기준**이다. 회의 기준으로 옮기려면 블록 시작을 더해야 하고, 수동 업로드는
+     * 그 값이 0 이라 결과가 같다 — 그래도 더한다. 나중에 시작이 0 이 아닌 블록에 이 경로가
+     * 쓰이면 빠진 덧셈이 조용히 틀린 길이를 만든다.
+     */
+    private void recoverSpanIfUnknown(PendingBlock block, List<Word> blockWords) {
+        if (block.endOffsetMs() > block.startOffsetMs()) {
+            // 구간을 이미 아는 블록이다(자동 트리거). 인식 결과로 덮으면 경계가 움직인다.
+            return;
+        }
+        if (blockWords.isEmpty()) {
+            return;
+        }
+        int lastEndMs = blockWords.get(blockWords.size() - 1).endMs();
+        if (sttBlockRepository.recoverAudioSpan(block.id(), block.startOffsetMs() + lastEndMs)) {
+            log.info("블록 길이 복구 — meetingId={} blockSeq={} 끝={}ms",
+                    block.meetingId(), block.blockSeq(), block.startOffsetMs() + lastEndMs);
+        }
+    }
+
+    /*
+     * 실패로 닫고 **그 구간을 구멍으로 남긴다.**
+     *
+     * <h2>구멍을 남기는 것이 실패 처리의 절반이다</h2>
+     * FAILED 만 남기면 그 구간은 "아무도 못 들은 10분"인데 분배 확정(RVW-05)은 그대로 열려
+     * 있다. 사람은 회의가 온전히 처리된 줄 알고 확정하고, 그 구간에서 나온 할 일은 영구히
+     * 사라진다 — 구멍을 레코드로 남기는 이유가 그것이다(V5.5 주석).
+     *
+     * <h2>전이가 실패했으면 구멍도 남기지 않는다</h2>
+     * 그 사이 사람이 재처리를 눌러 QUEUED 로 되돌렸다는 뜻이다. 그때 구멍을 남기면 **아직
+     * 돌고 있는 블록에 구멍이 붙어** 분배가 막히고, 새 잡이 성공해도 그 구멍은 이 블록의
+     * 것이라 성공 경로가 지워주긴 하지만 그 사이 화면이 거짓 배너를 띄운다.
+     *
+     * <h2>구멍 기록이 터져도 실패 처리는 유지한다</h2>
+     * 여기서 예외를 올리면 이미 FAILED 로 닫힌 블록의 처리가 예외로 끝나고, 워커 로그에는
+     * 그 블록이 미처리로 보인다. 구멍 누락은 관문 하나가 덜 서는 것이고 로그로 남는다.
+     */
+    private boolean failWithGap(PendingBlock block, String errorCode) {
+        boolean closed = sttBlockRepository.markFailed(block.id(), errorCode);
+        if (!closed) {
+            return false;
+        }
+        try {
+            sttGapRepository.replaceSttFailureGap(block.meetingId(), block.blockSeq(),
+                    block.startOffsetMs(), block.endOffsetMs());
+            /*
+             * 수동 업로드(WHOLE_FILE)가 인식 전에 실패하면 구간이 0~0 이다 — 길이를 인식
+             * 결과에서만 알 수 있어서 실패한 파일의 길이는 끝내 모른다.
+             *
+             * 그래도 **기록한다.** 구멍 레코드의 두 가지 일 중 하나(분배 확정을 막는 것)는
+             * 구간을 몰라도 성립하고, 그게 더 중요한 쪽이다 — 못 들은 구간이 있는데 확정이
+             * 열려 있으면 그 할 일은 영구히 사라진다. 다른 하나("어디를 다시 들어야 하나")는
+             * 이 경우 답하지 못하고, 화면은 파일 전체를 다시 들으라고 안내해야 한다.
+             */
+            if (block.endOffsetMs() <= block.startOffsetMs()) {
+                log.warn("구멍 구간을 모른다 — 인식 전에 실패한 파일이다. meetingId={} blockSeq={}",
+                        block.meetingId(), block.blockSeq());
+            }
+            log.warn("받아쓰기 구멍 기록 — meetingId={} blockSeq={} 구간={}~{}ms 사유={}",
+                    block.meetingId(), block.blockSeq(),
+                    block.startOffsetMs(), block.endOffsetMs(), errorCode);
+        } catch (RuntimeException e) {
+            log.error("구멍 기록 실패 — 블록은 FAILED 로 닫혔지만 관문이 서지 않는다. "
+                    + "meetingId={} blockSeq={}", block.meetingId(), block.blockSeq(), e);
+        }
+        return true;
+    }
+
+    /*
+     * 정본을 적재한다 — **DONE 으로 닫기 전에.**
+     *
+     * <h2>오프셋을 회의 기준으로 옮긴다</h2>
+     * 제공자는 자기가 받은 오디오(=블록 하나)의 처음을 0 으로 준다. 블록 시작을 더하지 않으면
+     * 두 번째 블록부터 발화가 회의 맨 앞으로 겹쳐 쌓이고, 그 뒤 전부가 무너진다 —
+     * 자막 시간 매칭(L1)도 근거 발화 ID 도 이 좌표계를 쓴다.
+     *
+     * <h2>화자 라벨에도 같은 일을 한다 — 블록 번호를 붙인다</h2>
+     * ⚠ 라벨도 블록 스코프 값이다. Transcribe 는 **잡 하나 안에서만** 라벨을 일관되게 주므로
+     * 블록 2 의 {@code spk_0} 과 블록 3 의 {@code spk_0} 은 같은 사람이 아니다. 그대로 저장하면
+     * L1 이 회의 전체에서 같은 라벨을 한 사람으로 묶고, **블록 경계에서 화자가 서로 뒤바뀐다.**
+     *
+     * 오프셋과 정확히 같은 종류의 실수라 같은 자리에서 함께 고친다 — 둘 다 "제공자 좌표를
+     * 회의 좌표로 옮기는" 일이고, 한쪽만 옮기면 나머지 한쪽이 조용히 틀린다.
+     *
+     * <h2>적재 뒤 markDone 이 false 여도 되돌리지 않는다</h2>
+     * 그 사이 사람이 재처리를 눌렀다는 뜻이고, 그러면 새 잡이 완료될 때 같은 블록의 행을 다시
+     * 교체한다(replaceBlockTranscript). 지금 넣은 것이 잠깐 남아 있는 것은 해롭지 않다 —
+     * 오히려 지우면 새 잡이 끝날 때까지 그 구간이 비어 있게 된다.
+     */
+    private void loadTranscript(PendingBlock block, List<Word> blockWords) {
+        List<Word> meetingWords = new ArrayList<>(blockWords.size());
+        for (Word word : blockWords) {
+            meetingWords.add(new Word(
+                    word.startMs() + block.startOffsetMs(),
+                    word.endMs() + block.startOffsetMs(),
+                    word.text(), word.punctuation(),
+                    meetingScopedLabel(block.blockSeq(), word.speakerLabel())));
+        }
+
+        List<Segment> segments = TranscriptSegmenter.segment(meetingWords);
+        List<NewUtterance> utterances = segments.stream()
+                .map(segment -> new NewUtterance(segment.startOffsetMs(), segment.endOffsetMs(),
+                        segment.text(), segment.speakerLabel()))
+                .toList();
+
+        int loaded = transcriptRepository.replaceBlockTranscript(
+                block.meetingId(), block.blockSeq(), utterances);
+
+        if (loaded == 0) {
+            /*
+             * 인식이 아무것도 못 건졌다. 침묵 구간이면 정상이지만 **조용히 넘기지 않는다** —
+             * 오디오 조립이 빈 파일을 만든 경우도 같은 모양이고, 그건 로그가 유일한 단서다.
+             */
+            log.warn("STT 결과가 비어 있다 — meetingId={} blockSeq={} job={}",
+                    block.meetingId(), block.blockSeq(), block.providerJobName());
+            return;
+        }
+        log.info("정본 적재 — meetingId={} blockSeq={} 발화 {}건", block.meetingId(), block.blockSeq(), loaded);
+    }
+
+    /*
+     * 블록 스코프 라벨({@code spk_0})을 회의 스코프로 만든다({@code 3:spk_0}).
+     *
+     * 라벨이 없으면 없는 채로 둔다 — 블록 번호만 남기면 "라벨은 없는데 화자 구분은 된 것처럼
+     * 보이는" 값이 생기고, L1 이 그 값으로 발화들을 한 사람으로 묶는다. 그 회의의 라벨 없는
+     * 발화 전부가 한 화자가 되는 경로다.
+     */
+    private static String meetingScopedLabel(int blockSeq, String blockLabel) {
+        return blockLabel == null ? null : blockSeq + ":" + blockLabel;
+    }
+}

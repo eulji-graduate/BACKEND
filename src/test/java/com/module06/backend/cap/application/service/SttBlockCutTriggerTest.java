@@ -1,0 +1,638 @@
+package com.module06.backend.cap.application.service;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Optional;
+
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+
+import com.module06.backend.cap.application.port.out.CapObjectStoragePort;
+import com.module06.backend.cap.application.port.out.SttBlockAudioAssemblyPort;
+import com.module06.backend.cap.application.port.out.SttBlockCutDetectionPort;
+import com.module06.backend.cap.domain.model.CaptureUploadState;
+import com.module06.backend.cap.domain.repository.CaptureUploadStateRepository;
+import com.module06.backend.capture.application.port.in.CreateSttBlockPort;
+import com.module06.backend.capture.application.port.in.CreateSttBlockPort.CreateSttBlockCommand;
+
+/*
+ * 10분/40청크 자동 블록 트리거(SttBlockCutTrigger)의 임계값 판정·예약(CAS) 순서·파이프라인 순서·
+ * 실패 시 best-effort(카운터 미갱신) 규칙을 검증하는 단위 테스트다. 트리거는 명세대로 정확히
+ * 40개에서 돈다(CodeRabbit 지적 — 여유분을 채우려고 트리거 자체를 늦추면 안 된다) — 대신 아직
+ * 안 올라온 뒤쪽 20초를 요청하지 않도록 윈도우 쪽에서 스스로 잘라 쓴다(availableUpToMs).
+ *
+ * @Async 어노테이션은 순수 호출(new)로 조립한 이 테스트에선 적용되지 않으므로, 메서드가
+ * 동기적으로 바로 실행된다.
+ */
+@DisplayName("10분/40청크 자동 블록 트리거")
+class SttBlockCutTriggerTest {
+
+    private static final Long COMPANY_ID = 1L;
+    private static final Long MEETING_ID = 500L;
+
+    @Test
+    @DisplayName("40개 미만이면 아무 포트도 부르지 않는다")
+    void doesNothingBelowThreshold() {
+        CaptureUploadState state = CaptureUploadState.startWithRecorder(MEETING_ID, 7L);
+        state.recordUpload(7L, 39);
+        FakeStateRepo stateRepo = new FakeStateRepo(state);
+        RefusingAudioAssemblyPort audioPort = new RefusingAudioAssemblyPort();
+        RefusingCutDetectionPort cutPort = new RefusingCutDetectionPort();
+        RecordingCreatePort createPort = new RecordingCreatePort();
+
+        trigger(stateRepo, audioPort, cutPort, createPort).triggerIfThresholdReached(COMPANY_ID, MEETING_ID);
+
+        assertThat(createPort.received).isEmpty();
+        assertThat(state.getBlocksFormed()).isZero();
+    }
+
+    @Test
+    @DisplayName("40개 누적이면(여유분 없어도) 예약→윈도우 추출→절단 탐지→블록 조립→블록 생성 순서로 돈다")
+    void runsFullPipelineExactlyAtFortyChunks() {
+        CaptureUploadState state = CaptureUploadState.startWithRecorder(MEETING_ID, 7L);
+        state.recordUpload(7L, 40);
+        FakeStateRepo stateRepo = new FakeStateRepo(state);
+        RecordingAudioAssemblyPort audioPort = new RecordingAudioAssemblyPort();
+        RecordingCutDetectionPort cutPort = new RecordingCutDetectionPort();
+        RecordingCreatePort createPort = new RecordingCreatePort();
+
+        trigger(stateRepo, audioPort, cutPort, createPort).triggerIfThresholdReached(COMPANY_ID, MEETING_ID);
+
+        // 목표 지점(targetOffsetMs)은 15초×40청크 = 600,000ms.
+        assertThat(audioPort.extractCalls).containsExactly(600_000L);
+        // 딱 40개만 올라온 시점이라 availableUpToMs도 600,000ms — 뒤쪽 20초 여유분은 아직 없다.
+        assertThat(audioPort.availableUpToCalls).containsExactly(600_000L);
+        assertThat(cutPort.detectCalls).containsExactly(600_000L);
+        assertThat(audioPort.assembleCalls).hasSize(1);
+        assertThat(createPort.received).hasSize(1);
+
+        CreateSttBlockCommand created = createPort.received.get(0);
+        assertThat(created.meetingId()).isEqualTo(MEETING_ID);
+        assertThat(created.blockSeq()).isZero();
+        assertThat(created.startOffsetMs()).isZero();
+        assertThat(created.endOffsetMs()).isEqualTo(600_000);
+        assertThat(created.cutReason()).isEqualTo("VAD_SILENCE");
+
+        // 파이프라인이 끝까지 성공했으므로 카운터가 전진해야 한다.
+        assertThat(state.getBlocksFormed()).isEqualTo(1);
+        assertThat(state.getLastBlockEndOffsetMs()).isEqualTo(600_000L);
+    }
+
+    /*
+     * cut-window wav는 절단 지점을 찾는 데만 쓰는 임시본이라, AI-01 호출(detectCutPoint)이 끝난
+     * 뒤에는 코드 어디서도 다시 참조하지 않는다 — 그동안 아무도 안 지워서 S3에 영구히 쌓이던
+     * 것을 오늘 고쳤다. 삭제가 detectCutPoint 이후에, extractCutWindow가 돌려준 바로 그 키로
+     * 일어나는지 검증한다.
+     */
+    @Test
+    @DisplayName("절단 지점 탐지 후 cut-window 임시 오디오를 삭제한다")
+    void deletesCutWindowAfterDetection() {
+        CaptureUploadState state = CaptureUploadState.startWithRecorder(MEETING_ID, 7L);
+        state.recordUpload(7L, 40);
+        FakeStateRepo stateRepo = new FakeStateRepo(state);
+        RecordingAudioAssemblyPort audioPort = new RecordingAudioAssemblyPort();
+        RecordingCutDetectionPort cutPort = new RecordingCutDetectionPort();
+        RecordingCreatePort createPort = new RecordingCreatePort();
+        RecordingObjectStoragePort storagePort = new RecordingObjectStoragePort();
+
+        trigger(stateRepo, audioPort, cutPort, createPort, storagePort)
+                .triggerIfThresholdReached(COMPANY_ID, MEETING_ID);
+
+        assertThat(storagePort.deletedKeys).containsExactly("stt-temp/org-1/meeting-500/cut-window.wav");
+    }
+
+    /*
+     * detectCutPoint(AI-01 호출)가 실패해도 cut-window는 지워져야 한다(CodeRabbit 지적) —
+     * try/finally로 감싸기 전에는 삭제 코드가 detectCutPoint 성공 시에만 실행돼, 이 실패 경로에서
+     * 정확히 "고치려던" orphan이 여전히 남는 반쪽짜리 수정이었다.
+     */
+    @Test
+    @DisplayName("절단 지점 탐지가 실패해도 cut-window 임시 오디오는 지운다")
+    void deletesCutWindowEvenWhenDetectionFails() {
+        CaptureUploadState state = CaptureUploadState.startWithRecorder(MEETING_ID, 7L);
+        state.recordUpload(7L, 40);
+        FakeStateRepo stateRepo = new FakeStateRepo(state);
+        RecordingAudioAssemblyPort audioPort = new RecordingAudioAssemblyPort();
+        SttBlockCutDetectionPort failingCutPort = (meetingId, windowAudioS3Key, windowStartOffsetMs,
+                                                    targetOffsetMs) -> {
+            throw new RuntimeException("AI-01 호출 실패(가정)");
+        };
+        RecordingCreatePort createPort = new RecordingCreatePort();
+        RecordingObjectStoragePort storagePort = new RecordingObjectStoragePort();
+
+        // 예외가 바깥으로 안 새어나가야 한다(best-effort).
+        trigger(stateRepo, audioPort, failingCutPort, createPort, storagePort)
+                .triggerIfThresholdReached(COMPANY_ID, MEETING_ID);
+
+        assertThat(storagePort.deletedKeys).containsExactly("stt-temp/org-1/meeting-500/cut-window.wav");
+        // 절단 탐지 이후 단계(블록 조립·생성)는 당연히 안 돈다.
+        assertThat(createPort.received).isEmpty();
+    }
+
+    /* 삭제가 실패해도(S3 일시 오류 등) 블록 파이프라인 자체는 끝까지 정상 진행되는지 검증한다. */
+    @Test
+    @DisplayName("cut-window 삭제가 실패해도 블록 생성 파이프라인은 계속 진행한다")
+    void continuesPipelineWhenCutWindowDeleteFails() {
+        CaptureUploadState state = CaptureUploadState.startWithRecorder(MEETING_ID, 7L);
+        state.recordUpload(7L, 40);
+        FakeStateRepo stateRepo = new FakeStateRepo(state);
+        RecordingAudioAssemblyPort audioPort = new RecordingAudioAssemblyPort();
+        RecordingCutDetectionPort cutPort = new RecordingCutDetectionPort();
+        RecordingCreatePort createPort = new RecordingCreatePort();
+        CapObjectStoragePort failingStoragePort = new CapObjectStoragePort() {
+            @Override
+            public IssuedPartUploadUrl issuePartUploadUrl(String s3Key, String contentType) {
+                throw new AssertionError("이 테스트는 대상 밖입니다.");
+            }
+
+            @Override
+            public IssuedPlaybackUrl issuePlaybackUrl(String s3Key) {
+                throw new AssertionError("이 테스트는 대상 밖입니다.");
+            }
+
+            @Override
+            public void deleteRecording(String s3Key) {
+                throw new RuntimeException("S3 삭제 실패(가정)");
+            }
+
+            @Override
+            public boolean objectMatches(String s3Key, long expectedSizeBytes) {
+                throw new AssertionError("이 테스트는 대상 밖입니다.");
+            }
+        };
+
+        trigger(stateRepo, audioPort, cutPort, createPort, failingStoragePort)
+                .triggerIfThresholdReached(COMPANY_ID, MEETING_ID);
+
+        // 삭제는 실패했지만 블록 생성까지는 정상적으로 끝났어야 한다.
+        assertThat(createPort.received).hasSize(1);
+        assertThat(state.getBlocksFormed()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("뒤쪽 여유분 청크가 이미 올라와 있으면 availableUpToMs가 그만큼 더 크게 전달된다")
+    void passesLargerAvailableUpToMsWhenLookaheadChunksExist() {
+        CaptureUploadState state = CaptureUploadState.startWithRecorder(MEETING_ID, 7L);
+        // 42개(=target 뒤 20초 분량 포함)가 이미 올라온 상황 — 트리거는 여전히 40개 지점에서
+        // 이미 발화 조건을 만족하지만, availableUpToMs는 실제 업로드분(42개=630,000ms)을 반영한다.
+        state.recordUpload(7L, 42);
+        FakeStateRepo stateRepo = new FakeStateRepo(state);
+        RecordingAudioAssemblyPort audioPort = new RecordingAudioAssemblyPort();
+        RecordingCutDetectionPort cutPort = new RecordingCutDetectionPort();
+        RecordingCreatePort createPort = new RecordingCreatePort();
+
+        trigger(stateRepo, audioPort, cutPort, createPort).triggerIfThresholdReached(COMPANY_ID, MEETING_ID);
+
+        assertThat(audioPort.extractCalls).containsExactly(600_000L);
+        assertThat(audioPort.availableUpToCalls).containsExactly(630_000L);
+    }
+
+    @Test
+    @DisplayName("예약에서 경합에 지면(blocksFormed가 기대와 다르면) 아무 포트도 안 부르고 조용히 넘어간다")
+    void skipsWhenReservationLosesRace() {
+        CaptureUploadState state = CaptureUploadState.startWithRecorder(MEETING_ID, 7L);
+        state.recordUpload(7L, 40);
+        // 이미 누가 먼저 예약해간 상황을 흉내낸다 — FakeStateRepo가 기대값 불일치로 항상 empty를 준다.
+        FakeStateRepo stateRepo = new FakeStateRepo(state);
+        stateRepo.forceReservationConflict = true;
+        RecordingCreatePort createPort = new RecordingCreatePort();
+
+        trigger(stateRepo, new RefusingAudioAssemblyPort(), new RefusingCutDetectionPort(), createPort)
+                .triggerIfThresholdReached(COMPANY_ID, MEETING_ID);
+
+        assertThat(createPort.received).isEmpty();
+    }
+
+    @Test
+    @DisplayName("파이프라인 도중 실패하면 예외를 던지지 않는다(카운터는 예약 시점에 이미 전진해 있다)")
+    void swallowsFailureAfterReservation() {
+        CaptureUploadState state = CaptureUploadState.startWithRecorder(MEETING_ID, 7L);
+        state.recordUpload(7L, 40);
+        FakeStateRepo stateRepo = new FakeStateRepo(state);
+        SttBlockAudioAssemblyPort failingAudioPort = new SttBlockAudioAssemblyPort() {
+            @Override
+            public ExtractedWindow extractCutWindow(Long companyId, Long meetingId, int segmentSeq,
+                                                     long targetOffsetMs, long availableUpToMs) {
+                throw new RuntimeException("S3/ffmpeg 실패 가정");
+            }
+
+            @Override
+            public String assembleBlockAudio(Long companyId, Long meetingId, int segmentSeq, int blockSeq,
+                                             long startOffsetMs, long endOffsetMs) {
+                throw new AssertionError("윈도우 추출이 실패했으므로 호출되면 안 됩니다.");
+            }
+        };
+        RecordingCreatePort createPort = new RecordingCreatePort();
+
+        SttBlockCutTrigger trigger = trigger(stateRepo, failingAudioPort, new RefusingCutDetectionPort(), createPort);
+
+        // 예외가 바깥으로 안 새어나가야 한다(best-effort).
+        trigger.triggerIfThresholdReached(COMPANY_ID, MEETING_ID);
+
+        assertThat(createPort.received).isEmpty();
+        // 예약은 무거운 작업 전에 이미 성공했으므로 blocksFormed는 전진해 있다 — block_seq 하나가
+        // 빈 채로 남는 것 자체는 설계 의도다.
+        assertThat(state.getBlocksFormed()).isEqualTo(1);
+        // 다만 **예약은 풀려 있어야 한다.** 안 그러면 blocksFormed만 오르고 finalizedBlocksCount가
+        // 그대로라, 예약을 1개로 제한하는 문이 닫힌 채 잠긴다.
+        assertThat(state.hasNoPendingReservation()).isTrue();
+    }
+
+    @Test
+    @DisplayName("파이프라인이 실패해도 그 회의는 다음 블록을 계속 만든다 — 예약이 풀리기 때문")
+    void keepsFormingBlocksAfterFailure() {
+        // 회의가 「요약 중」에 갇히던 경로다(2026-08-18 P1). 제출이 한 번 실패한 뒤로 그 회의가
+        // 블록을 하나도 더 못 만들면, 남은 녹음은 영영 STT를 안 타고 분석도 시작되지 않는다.
+        CaptureUploadState state = CaptureUploadState.startWithRecorder(MEETING_ID, 7L);
+        state.recordUpload(7L, 40);
+        FakeStateRepo stateRepo = new FakeStateRepo(state);
+        RecordingCreatePort createPort = new RecordingCreatePort();
+
+        // 첫 블록: 제출이 실패한다(잡 이름 충돌 등 — 어떤 이유든 같다).
+        SttBlockCutTrigger failing = trigger(stateRepo, new RecordingAudioAssemblyPort(),
+                new RecordingCutDetectionPort(), command -> {
+                    throw new RuntimeException("STT 제출 실패 가정");
+                });
+        failing.triggerIfThresholdReached(COMPANY_ID, MEETING_ID);
+        assertThat(state.getBlocksFormed()).isEqualTo(1);
+
+        // 40청크가 더 쌓이면 두 번째 블록이 만들어져야 한다.
+        state.recordUpload(7L, 80);
+        trigger(stateRepo, new RecordingAudioAssemblyPort(), new RecordingCutDetectionPort(), createPort)
+                .triggerIfThresholdReached(COMPANY_ID, MEETING_ID);
+
+        assertThat(createPort.received).hasSize(1);
+        assertThat(createPort.received.get(0).blockSeq()).isEqualTo(1);
+        // 실패한 구간의 오디오는 버려지지 않는다 — 끝 지점을 안 건드렸으므로 다음 블록이 같은
+        // 시작점(0)에서 조립해 그 구간을 흡수한다.
+        assertThat(createPort.received.get(0).startOffsetMs()).isZero();
+    }
+
+    @Test
+    @DisplayName("이어받기로 세그먼트가 바뀐 뒤에도(blocksFormed는 유지, lastSeq는 리셋) 40개면 트리거된다")
+    void triggersInNewSegmentRegardlessOfPriorBlocksFormed() {
+        // 이전 세그먼트에서 블록 2개를 이미 만든 뒤(blocksFormed=2) 이어받기가 일어난 상황을
+        // 재현한다 — assignOrVerifyRecorder가 lastSeq·lastBlockEndOffsetMs를 0으로 리셋한다.
+        CaptureUploadState state = CaptureUploadState.startWithRecorder(MEETING_ID, 7L);
+        state.reserveNextBlockSeqAndAdvanceOffset(600_000L);
+        state.finalizeBlockOffsetIfSegmentMatches(0, 600_000L);
+        state.reserveNextBlockSeqAndAdvanceOffset(1_200_000L);
+        state.finalizeBlockOffsetIfSegmentMatches(0, 1_200_000L);
+        state.assignOrVerifyRecorder(9L, true);
+        assertThat(state.getBlocksFormed()).isEqualTo(2);
+        assertThat(state.getLastBlockEndOffsetMs()).isZero();
+        assertThat(state.getLastSeq()).isZero();
+
+        // 새 세그먼트에서 정확히 40개만 올라왔다 — blocksFormed(2)와 무관하게 트리거돼야 한다.
+        state.recordUpload(9L, 40);
+        FakeStateRepo stateRepo = new FakeStateRepo(state);
+        RecordingAudioAssemblyPort audioPort = new RecordingAudioAssemblyPort();
+        RecordingCutDetectionPort cutPort = new RecordingCutDetectionPort();
+        RecordingCreatePort createPort = new RecordingCreatePort();
+
+        trigger(stateRepo, audioPort, cutPort, createPort).triggerIfThresholdReached(COMPANY_ID, MEETING_ID);
+
+        assertThat(audioPort.extractCalls).containsExactly(600_000L);
+        assertThat(createPort.received).hasSize(1);
+        assertThat(createPort.received.get(0).blockSeq()).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("세그먼트 전환 시 자투리가 없으면(청크 없음/이미 경계에 맞음) 아무 포트도 부르지 않는다")
+    void skipsTailFinalizationWhenNothingAccumulated() {
+        CaptureUploadState state = CaptureUploadState.startWithRecorder(MEETING_ID, 7L);
+        FakeStateRepo stateRepo = new FakeStateRepo(state);
+        RecordingCreatePort createPort = new RecordingCreatePort();
+
+        trigger(stateRepo, new RefusingAudioAssemblyPort(), new RefusingCutDetectionPort(), createPort)
+                .finalizeTailBlockOnSegmentChange(COMPANY_ID, MEETING_ID, 0, 0, 0, 0L);
+
+        assertThat(createPort.received).isEmpty();
+        assertThat(state.getBlocksFormed()).isZero();
+    }
+
+    @Test
+    @DisplayName("세그먼트 전환 시 자투리가 있으면 AI-01 없이 바로 예약하고 블록을 조립·생성한다")
+    void finalizesTailBlockWhenChunksAccumulated() {
+        CaptureUploadState state = CaptureUploadState.startWithRecorder(MEETING_ID, 7L);
+        FakeStateRepo stateRepo = new FakeStateRepo(state);
+        RecordingAudioAssemblyPort audioPort = new RecordingAudioAssemblyPort();
+        RecordingCreatePort createPort = new RecordingCreatePort();
+
+        // 세그먼트 0에서 25개(=375,000ms)만 쌓인 채 이어받기가 일어난 상황.
+        trigger(stateRepo, audioPort, new RefusingCutDetectionPort(), createPort)
+                .finalizeTailBlockOnSegmentChange(COMPANY_ID, MEETING_ID, 0, 25, 0, 0L);
+
+        assertThat(audioPort.assembleCalls).hasSize(1);
+        assertThat(createPort.received).hasSize(1);
+
+        CreateSttBlockCommand created = createPort.received.get(0);
+        assertThat(created.meetingId()).isEqualTo(MEETING_ID);
+        assertThat(created.blockSeq()).isZero();
+        assertThat(created.startOffsetMs()).isZero();
+        assertThat(created.endOffsetMs()).isEqualTo(375_000);
+        assertThat(created.cutReason()).isEqualTo("TAIL");
+
+        // 예약을 통해 blocksFormed만 전진한다 — 새 세그먼트의 끝 지점 리셋은 이 메서드의 몫이 아니다
+        // (assignOrVerifyRecorder가 세그먼트 전환과 같은 순간에 이미 처리했다는 전제).
+        assertThat(state.getBlocksFormed()).isEqualTo(1);
+    }
+
+    /* 회의 종료 시 자투리가 있으면 세그먼트 전환 버전과 같은 결과를 만들고, 성공했으니 true를 돌려주는지 검증한다. */
+    @Test
+    @DisplayName("회의 종료 시 자투리가 있으면 블록을 만들고 true를 반환한다")
+    void finalizesTailBlockOnMeetingCompletionWhenChunksAccumulated() {
+        CaptureUploadState state = CaptureUploadState.startWithRecorder(MEETING_ID, 7L);
+        FakeStateRepo stateRepo = new FakeStateRepo(state);
+        RecordingAudioAssemblyPort audioPort = new RecordingAudioAssemblyPort();
+        RecordingCreatePort createPort = new RecordingCreatePort();
+
+        boolean result = trigger(stateRepo, audioPort, new RefusingCutDetectionPort(), createPort)
+                .finalizeTailBlockOnMeetingCompletion(COMPANY_ID, MEETING_ID, 0, 25, 0, 0L);
+
+        assertThat(result).isTrue();
+        assertThat(audioPort.assembleCalls).hasSize(1);
+        assertThat(createPort.received).hasSize(1);
+        assertThat(createPort.received.get(0).cutReason()).isEqualTo("TAIL");
+    }
+
+    /* 자투리가 없으면(청크 없음/이미 경계에 맞음) 아무 포트도 안 부르고 true(진행해도 안전)를 반환하는지 검증한다. */
+    @Test
+    @DisplayName("회의 종료 시 자투리가 없으면 아무 포트도 안 부르고 true를 반환한다")
+    void returnsTrueOnMeetingCompletionWhenNothingAccumulated() {
+        CaptureUploadState state = CaptureUploadState.startWithRecorder(MEETING_ID, 7L);
+        FakeStateRepo stateRepo = new FakeStateRepo(state);
+        RecordingCreatePort createPort = new RecordingCreatePort();
+
+        boolean result = trigger(stateRepo, new RefusingAudioAssemblyPort(), new RefusingCutDetectionPort(),
+                createPort).finalizeTailBlockOnMeetingCompletion(COMPANY_ID, MEETING_ID, 0, 0, 0, 0L);
+
+        assertThat(result).isTrue();
+        assertThat(createPort.received).isEmpty();
+    }
+
+    /*
+     * 예약 경합에서 지면 false를 반환하는지 검증한다 — 호출자(MeetingCompletedAssemblyTrigger·
+     * RecordingAssemblyService)는 이 false를 보고 조립 dispatch를 미뤄야 한다(CodeRabbit 지적).
+     */
+    @Test
+    @DisplayName("회의 종료 시 TAIL 예약 경합에서 지면 false를 반환한다")
+    void returnsFalseOnMeetingCompletionWhenReservationLosesRace() {
+        CaptureUploadState state = CaptureUploadState.startWithRecorder(MEETING_ID, 7L);
+        FakeStateRepo stateRepo = new FakeStateRepo(state);
+        stateRepo.forceReservationConflict = true;
+        RecordingCreatePort createPort = new RecordingCreatePort();
+
+        boolean result = trigger(stateRepo, new RefusingAudioAssemblyPort(), new RefusingCutDetectionPort(),
+                createPort).finalizeTailBlockOnMeetingCompletion(COMPANY_ID, MEETING_ID, 0, 25, 0, 0L);
+
+        assertThat(result).isFalse();
+        assertThat(createPort.received).isEmpty();
+    }
+
+    /* 예약엔 성공했지만 오디오 조립/제출이 터지면 false를 반환하는지 검증한다(같은 이유). */
+    @Test
+    @DisplayName("회의 종료 시 TAIL 블록 조립이 실패하면 false를 반환한다")
+    void returnsFalseOnMeetingCompletionWhenAssemblyFails() {
+        CaptureUploadState state = CaptureUploadState.startWithRecorder(MEETING_ID, 7L);
+        FakeStateRepo stateRepo = new FakeStateRepo(state);
+        SttBlockAudioAssemblyPort failingAudioPort = new SttBlockAudioAssemblyPort() {
+            @Override
+            public ExtractedWindow extractCutWindow(Long companyId, Long meetingId, int segmentSeq,
+                                                     long targetOffsetMs, long availableUpToMs) {
+                throw new AssertionError("TAIL은 AI-01 윈도우를 안 쓰므로 호출되면 안 됩니다.");
+            }
+
+            @Override
+            public String assembleBlockAudio(Long companyId, Long meetingId, int segmentSeq, int blockSeq,
+                                             long startOffsetMs, long endOffsetMs) {
+                throw new RuntimeException("S3/ffmpeg 실패 가정");
+            }
+        };
+
+        boolean result = trigger(stateRepo, failingAudioPort, new RefusingCutDetectionPort(), new RecordingCreatePort())
+                .finalizeTailBlockOnMeetingCompletion(COMPANY_ID, MEETING_ID, 0, 25, 0, 0L);
+
+        assertThat(result).isFalse();
+        // 예약은 이미 성공해 blocksFormed가 전진했다 — 재료(recording_part)가 아직 안 지워졌으므로
+        // 호출자가 조립을 미루고 사람이 CAP-05로 재시도하면 다음 예약이 이어서 성공한다.
+        assertThat(state.getBlocksFormed()).isEqualTo(1);
+    }
+
+    /*
+     * triggerIfThresholdReached(비동기)가 아직 못 따라잡아 남은 구간이 정확히 40청크(한 블록
+     * 분량)면, 그 전체를 TAIL로 뭉개지 않고 false를 반환하는지 검증한다(CodeRabbit 지적).
+     */
+    @Test
+    @DisplayName("회의 종료 시 남은 구간이 정확히 40청크면 TAIL로 만들지 않고 false를 반환한다")
+    void returnsFalseWhenRemainingEqualsFullBlock() {
+        CaptureUploadState state = CaptureUploadState.startWithRecorder(MEETING_ID, 7L);
+        FakeStateRepo stateRepo = new FakeStateRepo(state);
+        RecordingCreatePort createPort = new RecordingCreatePort();
+
+        // lastSeq=40 — 정확히 한 블록 분량(600,000ms)이 아직 안 끝난 채 회의가 종료된 상황.
+        boolean result = trigger(stateRepo, new RefusingAudioAssemblyPort(), new RefusingCutDetectionPort(),
+                createPort).finalizeTailBlockOnMeetingCompletion(COMPANY_ID, MEETING_ID, 0, 40, 0, 0L);
+
+        assertThat(result).isFalse();
+        assertThat(createPort.received).isEmpty();
+        // 예약 자체를 시도하지 않으므로 blocksFormed는 그대로다.
+        assertThat(state.getBlocksFormed()).isZero();
+    }
+
+    /* 남은 구간이 40청크를 넘겨도(41개) 마찬가지로 TAIL로 만들지 않고 false를 반환하는지 검증한다. */
+    @Test
+    @DisplayName("회의 종료 시 남은 구간이 40청크를 넘으면 TAIL로 만들지 않고 false를 반환한다")
+    void returnsFalseWhenRemainingExceedsFullBlock() {
+        CaptureUploadState state = CaptureUploadState.startWithRecorder(MEETING_ID, 7L);
+        FakeStateRepo stateRepo = new FakeStateRepo(state);
+        RecordingCreatePort createPort = new RecordingCreatePort();
+
+        // lastSeq=41 — 비동기 10분 트리거가 못 따라잡은 채 회의가 종료된 상황.
+        boolean result = trigger(stateRepo, new RefusingAudioAssemblyPort(), new RefusingCutDetectionPort(),
+                createPort).finalizeTailBlockOnMeetingCompletion(COMPANY_ID, MEETING_ID, 0, 41, 0, 0L);
+
+        assertThat(result).isFalse();
+        assertThat(createPort.received).isEmpty();
+        assertThat(state.getBlocksFormed()).isZero();
+    }
+
+    private SttBlockCutTrigger trigger(CaptureUploadStateRepository stateRepo, SttBlockAudioAssemblyPort audioPort,
+                                       SttBlockCutDetectionPort cutPort, CreateSttBlockPort createPort) {
+        return trigger(stateRepo, audioPort, cutPort, createPort, noOpObjectStoragePort());
+    }
+
+    private SttBlockCutTrigger trigger(CaptureUploadStateRepository stateRepo, SttBlockAudioAssemblyPort audioPort,
+                                       SttBlockCutDetectionPort cutPort, CreateSttBlockPort createPort,
+                                       CapObjectStoragePort objectStoragePort) {
+        return new SttBlockCutTrigger(audioPort, cutPort, createPort, stateRepo, new SttBlockFormedWriter(stateRepo),
+                objectStoragePort);
+    }
+
+    // 대부분의 테스트는 cut-window 삭제 자체엔 관심이 없다 — 조용히 아무 일도 안 하는 대역.
+    private CapObjectStoragePort noOpObjectStoragePort() {
+        return new CapObjectStoragePort() {
+            @Override
+            public IssuedPartUploadUrl issuePartUploadUrl(String s3Key, String contentType) {
+                throw new AssertionError("이 테스트는 대상 밖입니다.");
+            }
+
+            @Override
+            public IssuedPlaybackUrl issuePlaybackUrl(String s3Key) {
+                throw new AssertionError("이 테스트는 대상 밖입니다.");
+            }
+
+            @Override
+            public void deleteRecording(String s3Key) {
+                // no-op — cut-window 삭제 자체를 검증하는 테스트는 RecordingObjectStoragePort를 쓴다.
+            }
+
+            @Override
+            public boolean objectMatches(String s3Key, long expectedSizeBytes) {
+                throw new AssertionError("이 테스트는 대상 밖입니다.");
+            }
+        };
+    }
+
+    // 실제 CAS 동작을 흉내낸다 — expectedBlocksFormed가 현재 state.blocksFormed와 같아야 예약이
+    // 성립한다. 지금 세그먼트가 expectedSegmentSeq와 같으면 targetOffsetMs가 현재
+    // reservedUpToOffsetMs보다 클 때만 오프셋까지 갱신하고, 다르면(TAIL이 옛 세그먼트 값으로 부른
+    // 경우) 오프셋 검증·갱신 없이 blocksFormed만 전진시킨다(실제 어댑터와 동일 계약).
+    // forceReservationConflict=true면 항상 실패한다(다른 트리거가 먼저 예약해간 경합 상황 재현용).
+    private static final class FakeStateRepo implements CaptureUploadStateRepository {
+        private CaptureUploadState state;
+        private boolean forceReservationConflict = false;
+
+        private FakeStateRepo(CaptureUploadState state) {
+            this.state = state;
+        }
+
+        @Override
+        public Optional<CaptureUploadState> findByMeetingId(Long meetingId) {
+            return Optional.ofNullable(state);
+        }
+
+        @Override
+        public CaptureUploadState save(CaptureUploadState toSave) {
+            this.state = toSave;
+            return toSave;
+        }
+
+        @Override
+        public void deleteByMeetingId(Long meetingId) {
+            throw new UnsupportedOperationException("이 테스트는 대상 밖입니다.");
+        }
+
+        @Override
+        public Optional<Integer> tryReserveNextBlockSeq(Long meetingId, int expectedBlocksFormed,
+                                                          int expectedSegmentSeq, long targetOffsetMs,
+                                                          boolean completesSynchronously) {
+            if (forceReservationConflict || state.getBlocksFormed() != expectedBlocksFormed) {
+                return Optional.empty();
+            }
+            if (!state.hasNoPendingReservation()) {
+                return Optional.empty();
+            }
+            boolean sameSegment = state.getSegmentSeq() == expectedSegmentSeq;
+            if (sameSegment && targetOffsetMs <= state.getReservedUpToOffsetMs()) {
+                return Optional.empty();
+            }
+            int reservedSeq = sameSegment
+                    ? state.reserveNextBlockSeqAndAdvanceOffset(targetOffsetMs)
+                    : state.reserveNextBlockSeq();
+            if (completesSynchronously) {
+                state.markBlockFinalized();
+            }
+            return Optional.of(reservedSeq);
+        }
+    }
+
+    private static final class RefusingAudioAssemblyPort implements SttBlockAudioAssemblyPort {
+        @Override
+        public ExtractedWindow extractCutWindow(Long companyId, Long meetingId, int segmentSeq,
+                                                 long targetOffsetMs, long availableUpToMs) {
+            throw new AssertionError("임계값 미달이므로 호출되면 안 됩니다.");
+        }
+
+        @Override
+        public String assembleBlockAudio(Long companyId, Long meetingId, int segmentSeq, int blockSeq,
+                                         long startOffsetMs, long endOffsetMs) {
+            throw new AssertionError("임계값 미달이므로 호출되면 안 됩니다.");
+        }
+    }
+
+    private static final class RefusingCutDetectionPort implements SttBlockCutDetectionPort {
+        @Override
+        public CutDetectionResult detectCutPoint(long meetingId, String windowAudioS3Key, long windowStartOffsetMs,
+                                                 long targetOffsetMs) {
+            throw new AssertionError("임계값 미달이거나 앞 단계가 실패했으므로 호출되면 안 됩니다.");
+        }
+    }
+
+    private static final class RecordingAudioAssemblyPort implements SttBlockAudioAssemblyPort {
+        private final List<Long> extractCalls = new ArrayList<>();
+        private final List<Long> availableUpToCalls = new ArrayList<>();
+        private final List<Object> assembleCalls = new ArrayList<>();
+
+        @Override
+        public ExtractedWindow extractCutWindow(Long companyId, Long meetingId, int segmentSeq,
+                                                 long targetOffsetMs, long availableUpToMs) {
+            extractCalls.add(targetOffsetMs);
+            availableUpToCalls.add(availableUpToMs);
+            return new ExtractedWindow("stt-temp/org-1/meeting-500/cut-window.wav", targetOffsetMs - 20_000L);
+        }
+
+        @Override
+        public String assembleBlockAudio(Long companyId, Long meetingId, int segmentSeq, int blockSeq,
+                                         long startOffsetMs, long endOffsetMs) {
+            assembleCalls.add(new Object());
+            return "stt-temp/org-1/meeting-500/blocks/" + blockSeq + ".wav";
+        }
+    }
+
+    private static final class RecordingCutDetectionPort implements SttBlockCutDetectionPort {
+        private final List<Long> detectCalls = new ArrayList<>();
+
+        @Override
+        public CutDetectionResult detectCutPoint(long meetingId, String windowAudioS3Key, long windowStartOffsetMs,
+                                                 long targetOffsetMs) {
+            detectCalls.add(targetOffsetMs);
+            return new CutDetectionResult(targetOffsetMs, "VAD_SILENCE", 700L);
+        }
+    }
+
+    private static final class RecordingObjectStoragePort implements CapObjectStoragePort {
+        private final List<String> deletedKeys = new ArrayList<>();
+
+        @Override
+        public IssuedPartUploadUrl issuePartUploadUrl(String s3Key, String contentType) {
+            throw new AssertionError("이 테스트는 대상 밖입니다.");
+        }
+
+        @Override
+        public IssuedPlaybackUrl issuePlaybackUrl(String s3Key) {
+            throw new AssertionError("이 테스트는 대상 밖입니다.");
+        }
+
+        @Override
+        public void deleteRecording(String s3Key) {
+            deletedKeys.add(s3Key);
+        }
+
+        @Override
+        public boolean objectMatches(String s3Key, long expectedSizeBytes) {
+            throw new AssertionError("이 테스트는 대상 밖입니다.");
+        }
+    }
+
+    private static final class RecordingCreatePort implements CreateSttBlockPort {
+        private final List<CreateSttBlockCommand> received = new ArrayList<>();
+
+        @Override
+        public void createAndSubmitBlock(CreateSttBlockCommand command) {
+            received.add(command);
+        }
+    }
+}

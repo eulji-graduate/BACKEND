@@ -1,0 +1,128 @@
+name: Gate 2 · LLM Judge
+
+# AI 코드 리뷰 루프 — Gate 2(의미규칙 LLM 판정) 게이트.
+#  - gate2-deterministic : 키 불필요. 채점·근거검증(Evidence)·정규화 등 "코드가 판단"하는 결정론 로직 검증(하드 게이트).
+#                          ※ 루프 자신의 로직을 검증한다 — PR 코드를 리뷰하지 않는다.
+#  - gate2-review        : PR의 변경 .java를 실제로 LLM 판정하는 유일한 잡.
+#                          로컬 pre-push 훅과 동일한 `reviewLoop --gate`. ★ 정책상 리포터 — 머지를 막지 않는다
+#                          (차단 경로가 비어 있다 · 근거는 아래 잡 주석 · 정책은 review-loop/DRIVER.md).
+# fork PR엔 secret이 주입되지 않으며, 키가 비면 러너가 스스로 생략·통과한다(exit 0).
+#
+# gate2-live-judge(어댑터·프롬프트 회귀 스모크)는 2026-08-13에 걷어냈다 — PR 코드를 리뷰하지
+# 않으면서 매 PR마다 Gemini를 호출했고, continue-on-error라 실패해도 아무 신호가 되지 못했다.
+# 어댑터가 살아있는지 확인이 필요하면 로컬에서 직접 돌린다 — 키를 반드시 먼저 넣는다:
+#   GEMINI_API_KEY=... ./gradlew test --tests "com.module06.backend.reviewloop.judge.Gemini*LiveTest"
+#
+# ⚠️ 키 없이 돌리면 @EnabledIfEnvironmentVariable 이 클래스를 통째로 skip 하고 Gradle 은
+#    BUILD SUCCESSFUL(exit 0)을 낸다 — 2026-08-14 확인, 5건 전부 SKIPPED 였다.
+#    즉 초록불은 "어댑터가 살아있다"는 증거가 아니다. 실제로 호출됐는지는 리포트로 본다:
+#      grep -o 'skipped="[0-9]*"' build/test-results/test/TEST-*Gemini*LiveTest.xml
+#    skipped="0" 이어야 실제로 돈 것이다(provider 불가·쿼터 초과도 같은 방식으로 조용히 지나간다).
+
+on:
+  pull_request:
+    branches: [ main, develop ]
+    types: [ opened, synchronize, reopened, ready_for_review ]
+
+# 워크플로 전역은 최소 권한(읽기)만. 쓰기 권한은 실제로 필요한 잡에서만 승격한다.
+permissions:
+  contents: read
+
+jobs:
+  gate2-deterministic:
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: write        # 테스트 결과 게시(check-run)용 — 이 잡에만 필요
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          persist-credentials: false   # 러너에 git 자격증명을 남기지 않는다
+      - name: Set up JDK 17
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3  # v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+      - name: Cache Gradle
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+      - name: Make Gradle executable
+        run: chmod +x gradlew
+      # reviewloop.judge.* 전체 실행. 라이브(Gemini*/Claude*)는 키가 없으므로 @EnabledIf로 skip된다.
+      - name: Gate 2 — 결정론 판정 로직 검증 (키 불필요)
+        run: >-
+          ./gradlew test
+          --tests "com.module06.backend.reviewloop.judge.*"
+          --no-daemon
+      - name: Publish Gate 2 (결정론) 결과
+        uses: EnricoMi/publish-unit-test-result-action@d0a4676d0e0b938bc201470d88276b7c74c712b3  # v2
+        if: always()
+        continue-on-error: true
+        with:
+          files: build/test-results/test/*.xml
+          check_name: "Gate 2 · 결정론 판정"
+
+  # PR 코드를 실제로 LLM 판정하는 유일한 잡. 로컬 pre-push 훅과 같은 명령·같은 기준(--gate)을 쓴다.
+  # 이 잡이 있어야 `git push --no-verify`로 로컬 훅을 건너뛴 코드도 머지 전에 판정을 받는다.
+  #
+  # ★ 정책상 리포터 — 머지를 막지 않는다(review-loop/DRIVER.md).
+  #   normalize()가 LLM severity를 카탈로그 값으로 덮으므로 CRITICAL finding이 만들어질 수 없고,
+  #   acceptance 판정은 미배선이라 INCOMPLETE도 도달 불가 → --gate의 차단 경로가 비어 있다.
+  #   즉 LLM 변덕으로 머지가 막히는 일은 구조적으로 없고, 동시에 LLM이 머지를 지켜주지도 않는다.
+  #   차단은 결정론 게이트(gate1-semgrep · gate2-deterministic) 몫이다.
+  #   단 스텝은 계속 실패할 수 있다 — '게이트 오류'(키·네트워크 등 리뷰 미수행)일 때다. 그건 고쳐야 한다.
+  #   정책이 뒤집히면(rules.yaml에 CRITICAL judge 규칙 추가) 이 잡이 자동으로 차단 게이트가 된다.
+  gate2-review:
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (base까지 — 변경 파일 diff용)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false   # PR 코드를 실행하는 잡 — git 자격증명을 남기지 않는다
+      - name: Set up JDK 17
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3  # v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+      - name: Cache Gradle
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+      - name: Make Gradle executable
+        run: chmod +x gradlew
+      - name: 변경 .java 목록 추출 (훅의 diff 로직과 동일 기준)
+        id: changed
+        run: |
+          # architecture/fixture/ 제외 — 훅과 동일. ARCH 규칙 자기검증용 '의도적 위반' 픽스처라
+          # 영구히 위반 상태여야 하고, 판정에 넣으면 고칠 수 없는 Minor가 매 PR에 반복된다.
+          git diff --name-only --diff-filter=ACMR \
+            "${{ github.event.pull_request.base.sha }}" HEAD \
+            | grep -E '\.java$' | grep -v '/architecture/fixture/' > changed.txt || true
+          echo "count=$(wc -l < changed.txt)" >> "$GITHUB_OUTPUT"
+          echo "변경 .java $(wc -l < changed.txt)개:"
+          cat changed.txt
+      # fork PR엔 secret이 주입되지 않는다 → 러너가 "키 없음 → 생략·통과"로 exit 0 (머지를 막지 않음).
+      # --max는 훅 기본값(5)보다 크게: 차단 게이트에서 상한 초과분이 리뷰 없이 통과하는 구멍을 줄인다.
+      - name: Gate 2 — PR 코드 LLM 판정 (리포터 · 차단은 결정론 게이트 몫)
+        if: steps.changed.outputs.count != '0'
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: >-
+          ./gradlew -q reviewLoop
+          --args="--files-from changed.txt --gate --max 20"
+          --no-daemon
