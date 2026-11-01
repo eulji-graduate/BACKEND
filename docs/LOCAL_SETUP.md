@@ -1,5 +1,125 @@
 # 로컬 개발 환경 세팅
 
+## 졸업작품 로컬 시연 프로파일 (`local`)
+
+아래 기존 절차는 Flyway 기반 개발 환경 설명이다. 졸업작품 시연은 `local` 프로파일을
+사용하며, Flyway 대신 별도로 준비한 스키마·더미 SQL을 DB에 적용한다.
+MySQL·Redis는 루트 `compose.yml`로 실행한다. 비어 있는 MySQL 볼륨에서 최초 실행하면
+최종 스키마와 더미 SQL이 순서대로 적용된다. Flyway는 실행하지 않는다.
+
+```bash
+./gradlew bootRun --args='--spring.profiles.active=local'
+```
+
+- 기본 연결: 백엔드 `http://localhost:8080`, MySQL `localhost:3306/module06`,
+  Redis `localhost:6379`, AI 서버 `http://localhost:8000`.
+- MySQL 계정 기본값은 `module06`이다. `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USERNAME`,
+  `REDIS_HOST`, `REDIS_PORT`, `AI_BASE_URL`, `SERVER_PORT`로 연결 위치를 변경할 수 있다.
+- 비밀값 `DB_PASSWORD`, `REDIS_PASSWORD`, `JWT_SECRET`, `INTERNAL_TOKEN`은 기존 루트
+  `application-secret.yml` 또는 실행 환경변수로 제공한다. AI 서버와 `INTERNAL_TOKEN`을
+  맞춰야 한다. 기본 토큰은 제공하지 않으며 기존 비밀 파일은 자동 생성·수정하지 않는다.
+- Spring은 `.env`를 자동으로 읽지 않는다. 해당 파일은 Docker Compose용이다.
+- Flyway와 Spring SQL 자동 초기화는 꺼져 있다. DB를 먼저 준비해야 하며,
+  `ddl-auto=validate`로 구조가 코드와 맞지 않으면 부팅을 중단한다.
+- CORS는 기본적으로 `http://localhost:3000`, `http://127.0.0.1:3000`을 허용한다.
+  백엔드는 루프백 주소에서만 수신한다.
+- `local`은 `prod`가 아니므로 기존 파일·녹음·STT 스텁이 선택된다.
+  프로파일 추가만으로 해당 기능이 실제 구현으로 바뀌지는 않는다.
+
+### MySQL·Redis 실행
+
+Docker Desktop을 실행한 뒤 아래 명령을 사용한다.
+
+```bash
+docker compose up -d --wait mysql redis
+docker compose ps
+```
+
+- MySQL 이미지는 `mysql:8.0.40`으로 고정한다. MySQL 서버를 macOS에 별도 설치할 필요는 없다.
+- Compose에 `DB_PASSWORD`, `MYSQL_ROOT_PASSWORD`, `REDIS_PASSWORD`를 제공해야 한다.
+  기존 `.env`는 자동 수정하지 않는다. 기존 파일에 없는 항목은 실행 셸의 환경변수로
+  제공할 수 있다. Spring용 `application-secret.yml`을 Compose가 읽지는 않는다.
+- `DB_PASSWORD`와 `REDIS_PASSWORD`는 백엔드에 제공하는 값과 일치해야 한다.
+  root 비밀번호는 MySQL 관리용이며 백엔드는 `module06` 계정을 사용한다.
+- `DB_PORT` 기본값은 `3306`이다. 포트 충돌로 변경한다면 백엔드 실행 환경에도
+  같은 값을 제공한다. Redis는 `127.0.0.1:6379`를 사용한다.
+- 관리 앱 연결: 호스트 `127.0.0.1`, 포트 `3306`, DB·사용자 `module06`
+  (각각 변경했다면 변경한 값). 비밀번호는 제공한 `DB_PASSWORD`다.
+- 최초 실행 시 DB·앱 계정과 함께 `db/local/schema.sql`, `db/local/data.sql`이 적용된다.
+  파일은 컨테이너에 읽기 전용으로 마운트한다.
+- MySQL·Redis 데이터는 각각 Docker 볼륨에 보존된다. 다음 명령으로 종료해도 유지된다.
+
+```bash
+docker compose down
+```
+
+MySQL 초기 계정·비밀번호·DB 생성 설정은 **비어 있는 데이터 볼륨에서만** 적용된다.
+기존 볼륨에서 환경변수만 바꾸면 계정이나 비밀번호가 바뀌지 않는다.
+`docker compose down -v`는 두 서비스의 데이터를 삭제하므로 일반 종료에 사용하지 않는다.
+
+### 시연 계정과 데이터
+
+기업 코드 **`ZDEMO`**, 공통 비밀번호 **`Demo1234!`**. 공개된 로컬 시연 전용 자격증명이며
+실제 계정에 사용하지 않는다. DB에는 BCrypt 해시만 저장한다.
+
+| ID | 이름 | 로그인 이메일 | 권한 | 상태 |
+|---|---|---|---|---|
+| 1 | 박대표 | ceo@zgroup.co.kr | OWNER | ACTIVE |
+| 2 | 김서준 | seojun@zgroup.co.kr | LEADER | ACTIVE |
+| 3 | 이하윤 | hayun@zgroup.co.kr | MEMBER + 관리자 겸직 | WAITING |
+| 4 | 박도현 | dohyun@zgroup.co.kr | MEMBER | ACTIVE |
+| 5 | 최유진 | yujin@zgroup.co.kr | LEADER | ACTIVE |
+| 6 | 정민석 | minseok@zgroup.co.kr | MEMBER | ACTIVE |
+| 7 | 강서연 | seoyeon@zgroup.co.kr | LEADER | ACTIVE |
+| 8 | 임지안 | jian@zgroup.co.kr | MEMBER | WAITING |
+| 9 | 오현우 | hyunwoo@zgroup.co.kr | LEADER | ACTIVE |
+| 10 | 한소율 | soyul@zgroup.co.kr | MEMBER | ACTIVE |
+
+- 회사는 온보딩 완료, 구독은 ACTIVE이며 초기화일을 포함하는 월 단위 기간을 갖는다.
+- 4개 부서, 프로젝트 2개, 회의실 2개, 완료·예정 회의 각 1개, 업무 6개,
+  휴직·퇴사 인수인계 각 1개, 토큰·텍스트 저장량·개인 Todo 데이터가 포함된다.
+- 이하윤은 팀장 중간 승인 대기, 임지안은 재분배·중간 승인 완료 후 최종 승인 대기다.
+  인수인계 상태는 실제 코드의 SUBMITTED/REASSIGNED를 따른다.
+- 회의록·요약·사용량·결제 이력은 사전 작성 데이터다. 실제 녹음 파일이나 실결제는 없다.
+  음성 저장량을 임의로 만들지 않고 실제 시드 텍스트의 바이트 수를 집계한다.
+- 날짜는 KST 기준 초기화 시점으로 계산한다. 재시작만으로 날짜를 갱신하지는 않는다.
+
+### 기존 빈 DB 초기화 / 시연 데이터 복구
+
+이미 빈 볼륨이 생성된 뒤 SQL 마운트를 추가했다면 Docker는 초기화 SQL을 다시 실행하지 않는다.
+MySQL이 준비된 상태에서 아래 명령으로 빈 DB에만 적용할 수 있다.
+
+```bash
+bash scripts/local-db.sh init
+```
+
+시연 상태를 처음으로 되돌릴 때는 **백엔드를 먼저 종료한 뒤** 실행한다.
+다음 명령은 ZDEMO 시드 회사가 있는 DB의 모든 테이블·변경 데이터를 삭제하고 다시 생성한다.
+기존 비밀 설정과 Redis 볼륨은 수정하지 않는다. 복구 후에는 브라우저에서 로그아웃 후 재로그인한다.
+
+```bash
+bash scripts/local-db.sh reset
+```
+
+`data.sql`은 한 번 적용하는 INSERT 파일이다. 중복 실행을 허용하지 않으며,
+SQL 실패 시 원인을 해결한 뒤 DB 상태를 확인해야 한다. 초기화 중 실패한 부분 스키마는
+자동 삭제하지 않는다. `schema.sql`은 빈 DB에서만 실행한다.
+
+### SQL 변경 규칙과 검증
+
+- 로컬 DB 구조의 정본은 `src/main/resources/db/local/schema.sql`이다.
+  엔티티 변경 시 스키마와 필요한 시드 변경을 같은 PR에 반영한다.
+- 기존 `db/migration`은 참고·기존 환경 검증용으로 보관한다. 로컬 시연 초기화에는 사용하지 않는다.
+- 별도 Testcontainers 검증은 실제 MySQL 8.0.40에 최종 SQL만 적용하고 엔티티 정합성,
+  데모 비밀번호, 구독 기간, 관리자 겸직·대기 상태와 인수인계 관계를 검사한다.
+  일반 `test`에서는 Docker가 필요한 이 검증을 제외한다.
+
+```bash
+./gradlew localSqlCheck
+```
+
+---
+
 클론 후 **한 번만** 하면 된다. 순서대로 하면 애플리케이션이 뜬다.
 
 > 이 문서가 없어서 실제로 막힌 사례가 있다(#44). 순서 중 하나라도 빠지면

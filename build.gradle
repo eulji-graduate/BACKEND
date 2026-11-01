@@ -141,7 +141,7 @@ tasks.named('test') {
 	// 힙 설정은 여기 두지 않는다 — 아래 tasks.withType(Test) 가 test 를 포함해 일괄로 잡는다.
 	// 양쪽에 두면 값이 갈렸을 때 어느 쪽이 이기는지 읽는 사람이 알 수 없다.
 	useJUnitPlatform {
-		excludeTags 'migration'
+		excludeTags 'migration', 'local-sql'
 	}
 }
 
@@ -177,6 +177,18 @@ tasks.register('migrationCheck', Test) {
 	description = 'Flyway 마이그레이션을 실제 MySQL(Testcontainers)에 적용하고 ddl-auto=validate로 엔티티-스키마 정합성을 검증한다. Docker 필요.'
 	useJUnitPlatform {
 		includeTags 'migration'
+	}
+	testClassesDirs = sourceSets.test.output.classesDirs
+	classpath = sourceSets.test.runtimeClasspath
+	shouldRunAfter(test)
+}
+
+// Flyway 없이 최종 SQL만 적용한 실제 MySQL과 엔티티·시연 데이터의 정합성을 검증한다.
+tasks.register('localSqlCheck', Test) {
+	group = 'verification'
+	description = 'MySQL 8.0.40에 local schema.sql/data.sql을 적용해 검증한다. Docker 필요.'
+	useJUnitPlatform {
+		includeTags 'local-sql'
 	}
 	testClassesDirs = sourceSets.test.output.classesDirs
 	classpath = sourceSets.test.runtimeClasspath
