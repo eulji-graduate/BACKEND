@@ -47,7 +47,7 @@ jobs:
     #    막으려면 Settings → Branches 에서 "Schema Migration Validation (real MySQL)" 을
     #    필수 체크로 올려야 한다. 워크플로 파일만으로는 머지를 막을 수 없다.
     #    (전에는 이 자리에 "하드 게이트 — 실패 시 머지를 막는다"고 적혀 있었는데 사실이 아니었다.)
-    #    다만 아래 docker job 이 이 잡을 needs 로 기다리므로, 실패하면 이미지 푸시는 막힌다.
+    #    아래 docker job 도 이 검증을 기다린 뒤 이미지를 빌드한다. 외부 업로드는 하지 않는다.
 
     steps:
       - name: Checkout
@@ -68,13 +68,14 @@ jobs:
       - name: Run migration check (Testcontainers MySQL)
         run: ./gradlew migrationCheck --no-daemon
 
+      - name: Validate local schema and demo data (no Flyway)
+        run: ./gradlew localSqlCheck --no-daemon
+
   docker:
-    name: Build and Push Docker Image
+    name: Build Docker Image
     if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
-    # migration-check 도 기다린다. 전에는 test 만 기다려서, Flyway 마이그레이션이 실제 MySQL에서
-    # 깨져도 이미지가 그대로 Docker Hub 에 올라갔다 — 그 이미지는 뜨는 순간 부팅에 실패한다
-    # (ddl-auto=validate · validate-on-migrate=true).
-    # 배포될 수 없는 이미지를 레지스트리에 올리지 않는다.
+    # 로컬 시연 프로젝트: 기존 develop push 조건에서 빌드만 검증한다.
+    # Docker Hub 로그인·이미지 업로드·서버 배포는 수행하지 않는다.
     needs: [test, migration-check]
     runs-on: ubuntu-latest
 
@@ -87,21 +88,14 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c  # v4
 
-      - name: Login to Docker Hub
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f  # v4
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Build and push
+      - name: Build image (no upload)
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7
         with:
           context: .
           platforms: linux/amd64
-          push: true
+          push: false
           tags: |
-            sungjinmo/z-spring:develop
-            sungjinmo/z-spring:${{ github.sha }}
+            backend-local:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

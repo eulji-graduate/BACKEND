@@ -49,9 +49,12 @@ class ActionReviewApplyAdapterTest {
     @Test
     void appliesPlannedStartDateWithProjectDueDateWhenActionHasProject() {
         Action action = personalAction(PROJECT_ID);
-        LocalDate dueDate = LocalDate.of(2026, 9, 1);
-        LocalDate plannedStartDate = LocalDate.of(2026, 8, 20);
-        LocalDate projectDueDate = LocalDate.of(2026, 9, 30);
+        // 고정된 예정일은 시간이 지나면 과거가 되어 정상 반영 경로 대신 날짜 검증에서 실패한다.
+        // 기준일은 한 번만 읽고, 자정 경계에서도 유효하도록 예정일에 여유를 둔다.
+        LocalDate today = LocalDate.now();
+        LocalDate dueDate = today.plusDays(15);
+        LocalDate plannedStartDate = today.plusDays(3);
+        LocalDate projectDueDate = today.plusDays(30);
         when(actionRepository.findById(ACTION_ID)).thenReturn(Optional.of(action));
         when(actionReferenceRepository.findProjectReferences(List.of(PROJECT_ID)))
                 .thenReturn(List.of(new ProjectReference(PROJECT_ID, projectDueDate, "TAG", "이름")));
