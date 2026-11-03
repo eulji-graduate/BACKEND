@@ -30,7 +30,7 @@ class MeetingRoomDeactivationControllerTest {
 
     /* 인증 principal과 Path가 비활성화 명령이 되고 빈 data 성공 응답으로 변환되는지 검증한다. */
     @Test
-    @DisplayName("ADMIN이 회의실을 비활성화하고 200 응답을 반환한다")
+    @DisplayName("관리자 겸직 MEMBER가 회의실을 비활성화하고 200 응답을 반환한다")
     void deactivatesMeetingRoomAndReturnsSuccessResponse() {
         /* 비활성화 유스케이스에 전달된 명령을 기록할 공간을 준비한다. */
         DeactivateMeetingRoomCommand[] capturedCommand = new DeactivateMeetingRoomCommand[1];
@@ -43,12 +43,12 @@ class MeetingRoomDeactivationControllerTest {
                 deactivateUseCase
         );
 
-        /* 회사 10의 ADMIN principal로 2번 회의실 비활성화 메서드를 호출한다. */
-        AuthPrincipal principal = new AuthPrincipal(3L, 10L, "ADMIN", true, null);
+        /* 회사 10의 관리자 겸직 MEMBER principal로 2번 회의실 비활성화 메서드를 호출한다. */
+        AuthPrincipal principal = new AuthPrincipal(3L, 10L, "MEMBER", true, null);
         ApiResponse<Void> response = controller.deactivateMeetingRoom(principal, 2L);
 
-        /* 토큰의 회사·역할과 Path 식별자가 정확한 애플리케이션 명령으로 결합돼야 한다. */
-        assertThat(capturedCommand[0]).isEqualTo(new DeactivateMeetingRoomCommand(10L, "ADMIN", 2L));
+        /* 토큰의 회사·관리자 여부와 Path 식별자가 정확한 애플리케이션 명령으로 결합돼야 한다. */
+        assertThat(capturedCommand[0]).isEqualTo(new DeactivateMeetingRoomCommand(10L, true, 2L));
 
         /* 명세의 200 상태·성공 메시지와 null data가 반환돼야 한다. */
         assertThat(response.getHttpStatus()).isEqualTo(200);

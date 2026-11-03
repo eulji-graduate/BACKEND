@@ -1,4 +1,39 @@
 services:
+  mysql:
+    image: mysql:8.0.40
+    restart: unless-stopped
+
+    ports:
+      - "127.0.0.1:${DB_PORT:-3306}:3306"
+
+    environment:
+      MYSQL_DATABASE: "${DB_NAME:-module06}"
+      MYSQL_USER: "${DB_USERNAME:-module06}"
+      MYSQL_PASSWORD: "${DB_PASSWORD:?DB_PASSWORD is required}"
+      MYSQL_ROOT_PASSWORD: "${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD is required}"
+      TZ: Asia/Seoul
+
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-time-zone=+09:00
+
+    volumes:
+      - mysql-local-data:/var/lib/mysql
+      # 비어 있는 MySQL 볼륨에서만 실행한다. 앱 재시작 시에는 데이터가 유지된다.
+      - ./src/main/resources/db/local/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      - ./src/main/resources/db/local/data.sql:/docker-entrypoint-initdb.d/02-data.sql:ro
+
+    healthcheck:
+      # ping만으로는 계정·DB 준비를 확인할 수 없어 실제 앱 계정으로 쿼리한다.
+      test:
+        - CMD-SHELL
+        - MYSQL_PWD="$${MYSQL_PASSWORD}" mysql --protocol=TCP -h 127.0.0.1 -u "$${MYSQL_USER}" "$${MYSQL_DATABASE}" -e 'SELECT 1' >/dev/null 2>&1
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
+
   redis:
     image: redis:8.8.1-alpine
     container_name: z-redis-local
@@ -39,4 +74,5 @@ services:
       start_period: 10s
 
 volumes:
+  mysql-local-data:
   redis-local-data:

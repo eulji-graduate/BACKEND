@@ -33,7 +33,7 @@ class MeetingRoomUpdateControllerTest {
 
     /* 인증 principal과 부분 본문이 수정 명령이 되고 전체 상태 응답으로 변환되는지 검증한다. */
     @Test
-    @DisplayName("OWNER가 회의실 일부 정보를 수정하고 전체 상태를 반환한다")
+    @DisplayName("관리자 겸직 MEMBER가 회의실 일부 정보를 수정하고 전체 상태를 반환한다")
     void returnsUpdatedMeetingRoomResponse() {
         /* 수정 유스케이스에 전달된 명령을 기록할 공간을 준비한다. */
         UpdateMeetingRoomCommand[] capturedCommand = new UpdateMeetingRoomCommand[1];
@@ -54,16 +54,16 @@ class MeetingRoomUpdateControllerTest {
         );
 
         /* 토큰 principal과 위치만 전달한 PATCH 요청을 준비한다. */
-        AuthPrincipal principal = new AuthPrincipal(3L, 10L, "OWNER", true, null);
+        AuthPrincipal principal = new AuthPrincipal(3L, 10L, "MEMBER", true, null);
         UpdateMeetingRoomRequest request = new UpdateMeetingRoomRequest();
         request.setLocation("본관 3층");
 
         /* 2번 회의실 수정 Controller 메서드를 직접 호출한다. */
         ApiResponse<UpdateMeetingRoomResponse> response = controller.updateMeetingRoom(principal, 2L, request);
 
-        /* 토큰의 회사·역할과 Path·부분 본문이 정확한 애플리케이션 명령으로 결합돼야 한다. */
+        /* 토큰의 회사·관리자 여부와 Path·부분 본문이 정확한 애플리케이션 명령으로 결합돼야 한다. */
         assertThat(capturedCommand[0].companyId()).isEqualTo(10L);
-        assertThat(capturedCommand[0].requesterRole()).isEqualTo("OWNER");
+        assertThat(capturedCommand[0].requesterAdmin()).isTrue();
         assertThat(capturedCommand[0].meetingRoomId()).isEqualTo(2L);
         assertThat(capturedCommand[0].locationProvided()).isTrue();
         assertThat(capturedCommand[0].location()).isEqualTo("본관 3층");

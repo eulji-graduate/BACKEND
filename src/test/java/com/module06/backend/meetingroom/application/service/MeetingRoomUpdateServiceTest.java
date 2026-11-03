@@ -43,9 +43,9 @@ class MeetingRoomUpdateServiceTest {
         RecordingCommandRepository commandRepository = new RecordingCommandRepository(existingRoom());
         MeetingRoomUpdateService service = service(commandRepository);
 
-        /* 위치만 바꾸는 OWNER 요청을 실행한다. */
+        /* 위치만 바꾸는 관리자 겸직자 요청을 실행한다. */
         UpdateMeetingRoomCommand command = command(
-                "OWNER",
+                true,
                 false, null,
                 true, "본관 3층"
         );
@@ -65,9 +65,9 @@ class MeetingRoomUpdateServiceTest {
         RecordingCommandRepository commandRepository = new RecordingCommandRepository(existingRoom());
         MeetingRoomUpdateService service = service(commandRepository);
 
-        /* locationProvided만 true이고 값은 null인 ADMIN 요청을 실행한다. */
+        /* locationProvided만 true이고 값은 null인 관리자 겸직 요청을 실행한다. */
         UpdateMeetingRoomCommand command = command(
-                "ADMIN",
+                true,
                 false, null,
                 true, null
         );
@@ -88,7 +88,7 @@ class MeetingRoomUpdateServiceTest {
 
         /* 모든 provided 플래그가 false인 요청은 공통 입력 오류여야 한다. */
         UpdateMeetingRoomCommand command = command(
-                "OWNER",
+                true,
                 false, null,
                 false, null
         );
@@ -96,16 +96,16 @@ class MeetingRoomUpdateServiceTest {
         assertThat(commandRepository.savedMeetingRoom).isNull();
     }
 
-    /* 관리 역할이 아닌 내부 호출을 서비스에서도 차단하는지 검증한다. */
+    /* 관리자 겸직이 없는 내부 호출을 서비스에서도 차단하는지 검증한다. */
     @Test
-    @DisplayName("MEMBER의 수정 요청은 MR-004로 거절한다")
-    void rejectsNonManagementRole() {
+    @DisplayName("관리자 겸직이 없는 사용자의 수정 요청은 MR-004로 거절한다")
+    void rejectsNonAdminFlag() {
         /* 웹 @PreAuthorize를 우회해 서비스를 직접 호출하는 상황을 준비한다. */
         MeetingRoomUpdateService service = service(new RecordingCommandRepository(existingRoom()));
 
-        /* MEMBER가 위치를 변경하려는 요청은 관리 권한 오류여야 한다. */
+        /* 관리자 겸직이 없는 사용자가 위치를 변경하려는 요청은 관리 권한 오류여야 한다. */
         UpdateMeetingRoomCommand command = command(
-                "MEMBER",
+                false,
                 false, null,
                 true, "본관 3층"
         );
@@ -120,7 +120,7 @@ class MeetingRoomUpdateServiceTest {
         MeetingRoomUpdateService service = service(new RecordingCommandRepository(null));
 
         /* 정상 형식의 수정 요청이어도 회사 범위에서 회의실을 찾지 못하면 404 계약이어야 한다. */
-        assertErrorCode(() -> service.updateMeetingRoom(locationCommand("OWNER", "본관 3층")), "MR-001");
+        assertErrorCode(() -> service.updateMeetingRoom(locationCommand(true, "본관 3층")), "MR-001");
     }
 
     /* 자기 자신을 제외한 활성 이름 중복이 MR-002인지 검증한다. */
@@ -134,7 +134,7 @@ class MeetingRoomUpdateServiceTest {
 
         /* 새로운 이름으로 변경하려는 요청은 현재 ID를 제외한 중복 조회 뒤 거절돼야 한다. */
         UpdateMeetingRoomCommand command = command(
-                "OWNER",
+                true,
                 true, " 대회의실 ",
                 false, null
         );
@@ -150,10 +150,10 @@ class MeetingRoomUpdateServiceTest {
     }
 
     /* 위치 하나만 바꾸는 정상 형식 명령을 만든다. */
-    private UpdateMeetingRoomCommand locationCommand(String role, String location) {
-        /* 공통 식별자와 전달된 역할·위치를 PATCH 명령으로 구성한다. */
+    private UpdateMeetingRoomCommand locationCommand(boolean admin, String location) {
+        /* 공통 식별자와 전달된 관리자 여부·위치를 PATCH 명령으로 구성한다. */
         return command(
-                role,
+                admin,
                 false, null,
                 true, location
         );
@@ -161,7 +161,7 @@ class MeetingRoomUpdateServiceTest {
 
     /* 테스트별 PATCH 필드 존재 여부와 값을 하나의 명령으로 만든다. */
     private UpdateMeetingRoomCommand command(
-            String role,
+            boolean admin,
             boolean nameProvided,
             String name,
             boolean locationProvided,
@@ -170,7 +170,7 @@ class MeetingRoomUpdateServiceTest {
         /* 회사 10의 2번 회의실을 대상으로 전달받은 부분 수정값을 사용한다. */
         return new UpdateMeetingRoomCommand(
                 10L,
-                role,
+                admin,
                 2L,
                 nameProvided,
                 name,

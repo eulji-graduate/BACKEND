@@ -29,7 +29,7 @@ public enum MeetingRoomErrorCode implements ErrorCode {
     /* ROOM-03·04 — 같은 회사의 활성 회의실 이름이 중복된 경우다. */
     MEETING_ROOM_NAME_DUPLICATE(HttpStatus.CONFLICT, "MR-002", "이미 사용 중인 회의실 이름입니다."),
 
-    /* ROOM-04·05 — OWNER·ADMIN이 아닌 요청자가 회의실을 관리하려는 경우다. */
+    /* ROOM-03·04·05 — 관리자 겸직자가 아닌 요청자가 회의실을 관리하려는 경우다. */
     MEETING_ROOM_MANAGEMENT_FORBIDDEN(HttpStatus.FORBIDDEN, "MR-004", "회의실 관리 권한이 없습니다."),
 
     /* ROOM-05 — 미래 SCHEDULED 예약이 남아 있어 비활성화할 수 없는 경우다. */
