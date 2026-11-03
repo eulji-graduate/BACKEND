@@ -125,7 +125,7 @@ public class HandoverService implements CreateHandoverUseCase, ReassignHandoverI
     @Override
     public Handover finalize(Long handoverId, AuthPrincipal approverPrincipal, LocalDateTime finalizedAt) {
         Handover handover = findHandover(handoverId);
-        assertCompanyApprover(handover, approverPrincipal);
+        assertOwnerApprover(handover, approverPrincipal);
         OrgQueryPort.MemberSnapshot approver = orgQueryPort().findMember(approverPrincipal.memberId());
         handover.finalizeApproval(approverPrincipal.memberId(), approver.name(), finalizedAt,
                 isLeaderOffboarding(handover));
@@ -198,7 +198,7 @@ public class HandoverService implements CreateHandoverUseCase, ReassignHandoverI
             throw new BusinessException(HandoverErrorCode.HO_REJECT_COMMAND_INVALID);
         }
         Handover handover = findHandover(command.handoverId());
-        assertCanApprove(handover, command.requester());
+        assertCanReject(handover, command.requester());
         // 상태 전이 검증을 먼저 통과시킨다 — FINALIZED/REJECTED 같은 종단 상태면 여기서 예외로 끝나
         // 액션 롤백 같은 부수효과가 전혀 일어나지 않는다. 유효한 반려 경로에서만 롤백을 실행한다.
         handover.reject(command.reason());
@@ -279,9 +279,27 @@ public class HandoverService implements CreateHandoverUseCase, ReassignHandoverI
         throw new BusinessException(HandoverErrorCode.HO_ACCESS_DENIED);
     }
 
-    private void assertCompanyApprover(Handover handover, AuthPrincipal principal) {
+    private void assertOwnerApprover(Handover handover, AuthPrincipal principal) {
         assertAuthenticated(principal);
-        if (!hasCompanyScope(principal)) {
+        if (!"OWNER".equals(principal.authority())) {
+            throw new BusinessException(HandoverErrorCode.HO_ACCESS_DENIED);
+        }
+        assertWriterInCompany(handover, principal.companyId());
+    }
+
+    private void assertCanReject(Handover handover, AuthPrincipal principal) {
+        assertAuthenticated(principal);
+        if ("OWNER".equals(principal.authority())) {
+            assertWriterInCompany(handover, principal.companyId());
+            return;
+        }
+        // 팀장은 자기 팀 일반 사원의 중간 단계만 반려할 수 있다.
+        // 관리자 겸직은 최종 결재 권한이 아니며, 팀장 본인의 신청도 스스로 반려할 수 없다.
+        if (handover.getStatus() != HandoverStatus.SUBMITTED
+                || !"LEADER".equals(principal.authority())
+                || !Objects.equals(handover.getTeamId(), principal.teamId())
+                || Objects.equals(handover.getWriterMemberId(), principal.memberId())
+                || !Objects.equals(orgQueryPort().findTeamLeaderId(handover.getTeamId()), principal.memberId())) {
             throw new BusinessException(HandoverErrorCode.HO_ACCESS_DENIED);
         }
         assertWriterInCompany(handover, principal.companyId());

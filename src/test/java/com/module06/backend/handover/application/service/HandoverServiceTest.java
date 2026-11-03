@@ -19,6 +19,8 @@ import com.module06.backend.handover.domain.model.HandoverType;
 import com.module06.backend.handover.domain.repository.HandoverRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -429,6 +431,7 @@ class HandoverServiceTest {
         Handover handover = submittedWithOneItem();
         when(handoverRepository.findById(HANDOVER_ID)).thenReturn(Optional.of(handover));
         when(orgQueryPort.findTeamLeaderId(TEAM)).thenReturn(LEADER);
+        when(orgQueryPort.findMemberIdsByCompany(COMPANY)).thenReturn(List.of(WRITER));
 
         Handover saved = handoverService.reject(new RejectHandoverCommand(HANDOVER_ID, "needs more detail",
                 leaderPrincipal()));
@@ -448,8 +451,9 @@ class HandoverServiceTest {
         when(orgQueryPort.findMember(LEADER)).thenReturn(new OrgQueryPort.MemberSnapshot(LEADER, "Park", "Leader"));
 
         handoverService.complete(HANDOVER_ID, leaderPrincipal(), NOW);
+        when(orgQueryPort.findMemberIdsByCompany(COMPANY)).thenReturn(List.of(WRITER));
         Handover saved = handoverService.reject(new RejectHandoverCommand(HANDOVER_ID, "not enough",
-                leaderPrincipal()));
+                ownerPrincipal()));
 
         assertThat(saved.getStatus()).isEqualTo(HandoverStatus.REJECTED);
         assertThat(saved.getItems()).singleElement()
@@ -465,6 +469,7 @@ class HandoverServiceTest {
         handover.reassignItem(100L, TARGET, "Lee", "Staff", NOW);
         when(handoverRepository.findById(HANDOVER_ID)).thenReturn(Optional.of(handover));
         when(orgQueryPort.findTeamLeaderId(TEAM)).thenReturn(LEADER);
+        when(orgQueryPort.findMemberIdsByCompany(COMPANY)).thenReturn(List.of(WRITER));
 
         Handover saved = handoverService.reject(new RejectHandoverCommand(HANDOVER_ID, "try again",
                 leaderPrincipal()));
@@ -562,6 +567,98 @@ class HandoverServiceTest {
         return new ActionReassignPort.HandoverableAction(id, title, "PRJ", 700L, "TEAM", status,
                 LocalDate.of(2026, 8, 30), null, 500L + (id - 100L), "Meeting " + title, "Content " + title,
                 "Parent " + title, LocalDate.of(2026, 8, 1));
+    }
+
+    @ParameterizedTest
+    @CsvSource({"MEMBER, true", "LEADER, true", "MEMBER, false", "LEADER, false"})
+    void finalizeRejectsNonOwnerEvenWithAdminFlag(String role, boolean admin) {
+        Handover handover = reassigned(HandoverType.VACATION);
+        when(handoverRepository.findById(HANDOVER_ID)).thenReturn(Optional.of(handover));
+        AuthPrincipal requester = new AuthPrincipal(LEADER, COMPANY, role, admin, TEAM);
+
+        assertAccessDenied(() -> handoverService.finalize(HANDOVER_ID, requester, NOW));
+
+        assertThat(handover.getStatus()).isEqualTo(HandoverStatus.REASSIGNED);
+        verifyNoInteractions(memberStatusPort, actionReassignPort, finalizeHandoverInsightsUseCase);
+        verify(handoverRepository, never()).save(any());
+    }
+
+    @ParameterizedTest
+    @CsvSource({"MEMBER, true", "LEADER, true", "MEMBER, false", "LEADER, false"})
+    void finalRejectionRejectsNonOwnerWithoutSideEffects(String role, boolean admin) {
+        Handover handover = reassigned(HandoverType.VACATION);
+        when(handoverRepository.findById(HANDOVER_ID)).thenReturn(Optional.of(handover));
+        AuthPrincipal requester = new AuthPrincipal(LEADER, COMPANY, role, admin, TEAM);
+
+        assertAccessDenied(() -> handoverService.reject(
+                new RejectHandoverCommand(HANDOVER_ID, "reason", requester)));
+
+        assertThat(handover.getStatus()).isEqualTo(HandoverStatus.REASSIGNED);
+        verifyNoInteractions(memberStatusPort, actionReassignPort);
+        verify(handoverRepository, never()).save(any());
+    }
+
+    @Test
+    void adminMemberCannotRejectIntermediateRequest() {
+        Handover handover = submittedWithOneItem();
+        when(handoverRepository.findById(HANDOVER_ID)).thenReturn(Optional.of(handover));
+        AuthPrincipal admin = new AuthPrincipal(TARGET, COMPANY, "MEMBER", true, TEAM);
+
+        assertAccessDenied(() -> handoverService.reject(
+                new RejectHandoverCommand(HANDOVER_ID, "reason", admin)));
+
+        assertThat(handover.getStatus()).isEqualTo(HandoverStatus.SUBMITTED);
+        verifyNoInteractions(memberStatusPort, actionReassignPort);
+        verify(handoverRepository, never()).save(any());
+    }
+
+    @ParameterizedTest
+    @CsvSource({"VACATION", "OFFBOARDING"})
+    void teamLeaderCannotRejectOwnRequest(HandoverType type) {
+        Handover handover = type == HandoverType.VACATION
+                ? submittedWithOneItem() : submittedOffboardingWithOneItem();
+        when(handoverRepository.findById(HANDOVER_ID)).thenReturn(Optional.of(handover));
+        AuthPrincipal writerLeader = new AuthPrincipal(WRITER, COMPANY, "LEADER", true, TEAM);
+
+        assertAccessDenied(() -> handoverService.reject(
+                new RejectHandoverCommand(HANDOVER_ID, "reason", writerLeader)));
+
+        verifyNoInteractions(memberStatusPort, actionReassignPort);
+        verify(handoverRepository, never()).save(any());
+    }
+
+    @ParameterizedTest
+    @CsvSource({"false", "true"})
+    void currentTeamLeaderCanRejectIntermediateRequestRegardlessOfAdminFlag(boolean admin) {
+        Handover handover = submittedWithOneItem();
+        when(handoverRepository.findById(HANDOVER_ID)).thenReturn(Optional.of(handover));
+        when(orgQueryPort.findTeamLeaderId(TEAM)).thenReturn(LEADER);
+        when(orgQueryPort.findMemberIdsByCompany(COMPANY)).thenReturn(List.of(WRITER));
+        AuthPrincipal requester = new AuthPrincipal(LEADER, COMPANY, "LEADER", admin, TEAM);
+
+        Handover saved = handoverService.reject(new RejectHandoverCommand(HANDOVER_ID, "reason", requester));
+
+        assertThat(saved.getStatus()).isEqualTo(HandoverStatus.REJECTED);
+        verify(memberStatusPort).restoreActive(WRITER);
+    }
+
+    @Test
+    void rejectRejectsLeaderOutsideWriterCompany() {
+        Handover handover = submittedWithOneItem();
+        when(handoverRepository.findById(HANDOVER_ID)).thenReturn(Optional.of(handover));
+        when(orgQueryPort.findTeamLeaderId(TEAM)).thenReturn(LEADER);
+        when(orgQueryPort.findMemberIdsByCompany(COMPANY)).thenReturn(List.of());
+
+        assertAccessDenied(() -> handoverService.reject(
+                new RejectHandoverCommand(HANDOVER_ID, "reason", leaderPrincipal())));
+
+        verifyNoInteractions(memberStatusPort, actionReassignPort);
+        verify(handoverRepository, never()).save(any());
+    }
+
+    private void assertAccessDenied(Runnable action) {
+        assertThatThrownBy(action::run).isInstanceOfSatisfying(BusinessException.class,
+                exception -> assertThat(exception.getErrorCode()).isEqualTo(HandoverErrorCode.HO_ACCESS_DENIED));
     }
 
     private static Handover submittedWithOneItem() {

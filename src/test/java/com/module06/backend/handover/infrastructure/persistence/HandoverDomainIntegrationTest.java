@@ -264,7 +264,7 @@ class HandoverDomainIntegrationTest {
         handoverService.complete(handover.getId(), leaderPrincipal(), NOW.plusHours(1));
 
         Handover rejected = handoverService.reject(new RejectHandoverCommand(handover.getId(), "rollback",
-                leaderPrincipal()));
+                ownerPrincipal()));
 
         assertThat(rejected.getStatus()).isEqualTo(HandoverStatus.REJECTED);
         assertThat(assigneeOfAction(ACTION_TODO)).isEqualTo(WRITER);

@@ -208,9 +208,9 @@ public class HandoverController {
         return ApiResponse.success("Handover completed.", HandoverResponse.from(handover));
     }
 
-    // 최종 승인 = 오너·어드민. 같은 회사 건인지(크로스컴퍼니 차단)는 서비스가 볼 몫 — B(findMember) 배선 후.
+    // 최종 승인은 Owner 전용. 같은 회사 건인지는 서비스에서 다시 검증한다.
     @PatchMapping("/{id}/finalize")
-    @PreAuthorize("hasAnyRole('OWNER', 'ADMIN')")
+    @PreAuthorize("hasRole('OWNER')")
     public ApiResponse<HandoverResponse> finalize(@PathVariable Long id,
                                                   @Parameter(hidden = true)
                                                   @AuthenticationPrincipal AuthPrincipal principal) {
@@ -237,9 +237,9 @@ public class HandoverController {
         return ApiResponse.success("신규 팀장에게 인수인계 액션을 일괄 이관했습니다.", HandoverResponse.from(handover));
     }
 
-    // 반려는 승인 라인(팀장·오너·어드민)만.
+    // 최종 반려는 Owner, 중간 반려는 해당 팀 현 팀장만 허용한다. 단계·회사 검증은 서비스에서 수행한다.
     @PatchMapping("/{id}/reject")
-    @PreAuthorize("hasAnyRole('LEADER', 'OWNER', 'ADMIN')")
+    @PreAuthorize("hasAnyRole('LEADER', 'OWNER')")
     public ApiResponse<HandoverResponse> reject(@PathVariable Long id,
                                                 @Parameter(hidden = true)
                                                 @AuthenticationPrincipal AuthPrincipal principal,
