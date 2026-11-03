@@ -3,8 +3,6 @@ package com.module06.backend.meetingroom.application.service;
 import java.time.Clock;
 import java.time.LocalDateTime;
 import java.util.List;
-import java.util.Locale;
-import java.util.Set;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -28,9 +26,6 @@ import com.module06.backend.meetingroom.exception.MeetingRoomErrorCode;
 @RequiredArgsConstructor
 public class MeetingRoomDeactivationService implements DeactivateMeetingRoomUseCase {
 
-    /* 회의실 비활성화가 허용된 회사 역할 목록이다. */
-    private static final Set<String> MANAGEMENT_ROLES = Set.of("OWNER", "ADMIN");
-
     /* 활성 회의실 잠금 조회와 비활성 상태 저장을 수행하는 명령 저장소다. */
     private final MeetingRoomCommandRepository meetingRoomCommandRepository;
 
@@ -44,7 +39,7 @@ public class MeetingRoomDeactivationService implements DeactivateMeetingRoomUseC
     @Override
     @Transactional
     public void deactivateMeetingRoom(DeactivateMeetingRoomCommand command) {
-        /* 웹 계층을 우회한 호출도 식별자와 관리 역할 계약을 지키도록 먼저 검증한다. */
+        /* 웹 계층을 우회한 호출도 식별자와 관리자 겸직 계약을 지키도록 먼저 검증한다. */
         validateCommand(command);
 
         /* 신규 예약 생성과 경쟁하지 않도록 회사 범위의 활성 회의실 행을 쓰기 잠금으로 조회한다. */
@@ -70,20 +65,17 @@ public class MeetingRoomDeactivationService implements DeactivateMeetingRoomUseC
 
     /* 인증 회사·경로 식별자와 비활성화 권한을 서비스 경계에서 검증한다. */
     private void validateCommand(DeactivateMeetingRoomCommand command) {
-        /* 명령이나 양수 식별자, 역할 값이 없으면 정상적인 비활성화 대상을 결정할 수 없다. */
+        /* 명령이나 양수 식별자가 없으면 정상적인 비활성화 대상을 결정할 수 없다. */
         if (command == null
                 || command.companyId() == null
                 || command.companyId() <= 0L
                 || command.meetingRoomId() == null
-                || command.meetingRoomId() <= 0L
-                || command.requesterRole() == null
-                || command.requesterRole().isBlank()) {
+                || command.meetingRoomId() <= 0L) {
             throw new BusinessException(CommonErrorCode.INVALID_INPUT_VALUE);
         }
 
-        /* 웹 인가를 우회한 내부 호출도 OWNER·ADMIN 외에는 회의실을 비활성화하지 못하게 한다. */
-        String normalizedRole = command.requesterRole().trim().toUpperCase(Locale.ROOT);
-        if (!MANAGEMENT_ROLES.contains(normalizedRole)) {
+        /* 웹 인가를 우회한 내부 호출도 관리자 겸직자 외에는 회의실을 비활성화하지 못하게 한다. */
+        if (!command.requesterAdmin()) {
             throw new BusinessException(MeetingRoomErrorCode.MEETING_ROOM_MANAGEMENT_FORBIDDEN);
         }
     }

@@ -42,11 +42,11 @@ public class UpdateMeetingRoomRequest {
     }
 
     /* 인증·경로 값과 PATCH 필드 존재 정보를 애플리케이션 명령으로 변환한다. */
-    public UpdateMeetingRoomCommand toCommand(Long companyId, String requesterRole, Long meetingRoomId) {
+    public UpdateMeetingRoomCommand toCommand(Long companyId, boolean requesterAdmin, Long meetingRoomId) {
         /* 이름과 위치의 필드 존재 정보를 그대로 보존한다. */
         return new UpdateMeetingRoomCommand(
                 companyId,
-                requesterRole,
+                requesterAdmin,
                 meetingRoomId,
                 nameProvided,
                 name,

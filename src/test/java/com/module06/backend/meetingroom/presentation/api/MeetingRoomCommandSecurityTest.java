@@ -1,6 +1,10 @@
 package com.module06.backend.meetingroom.presentation.api;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.Mockito.verify;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.request;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.authentication;
@@ -15,10 +19,14 @@ import java.util.List;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.authentication.TestingAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
@@ -27,6 +35,8 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.security.test.context.support.WithMockUser;
 
 import com.module06.backend.global.security.AuthPrincipal;
+import com.module06.backend.global.security.JwtTokenProvider;
+import com.module06.backend.meetingroom.application.result.MeetingRoomUpdateResult;
 import com.module06.backend.meetingroom.application.result.MeetingRoomCreationResult;
 import com.module06.backend.meetingroom.application.usecase.CreateMeetingRoomUseCase;
 import com.module06.backend.meetingroom.application.usecase.DeactivateMeetingRoomUseCase;
@@ -43,6 +53,9 @@ class MeetingRoomCommandSecurityTest {
     /* 실제 SecurityFilterChain을 통과하는 HTTP 요청을 실행한다. */
     @Autowired
     private MockMvc mockMvc;
+
+    @Autowired
+    private JwtTokenProvider jwtTokenProvider;
 
     /* 익명 요청에서 애플리케이션 유스케이스가 호출되지 않는지 확인하는 대역이다. */
     @MockitoBean
@@ -164,33 +177,8 @@ class MeetingRoomCommandSecurityTest {
     }
 
     /*
-     * 회사 OWNER가 ADMIN 겸직 없이도 ROOM-03을 호출할 수 있는지 검증한다.
-     * 등록은 수정·삭제(ROOM-04·05)와 같은 hasAnyRole('OWNER', 'ADMIN') 규칙이라,
-     * base role OWNER면 겸직 플래그와 무관하게 유스케이스까지 통과해야 한다.
-     */
-    @Test
-    @DisplayName("OWNER의 POST 요청을 유스케이스까지 통과시킨다")
-    void allowsOwnerCreateRequest() throws Exception {
-        /* 등록 유스케이스가 정상 결과를 반환하도록 스텁을 준비한다. */
-        when(createMeetingRoomUseCase.createMeetingRoom(any()))
-                .thenReturn(new MeetingRoomCreationResult(101L));
-
-        /* ADMIN 겸직이 없는 순수 OWNER 인증으로 정상 등록 본문을 전송한다. */
-        mockMvc.perform(post("/api/rooms")
-                        .with(authentication(authenticationOf("OWNER")))
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("""
-                                {
-                                  "name": "대회의실",
-                                  "location": "박애관 421호"
-                                }
-                                """))
-                .andExpect(status().isCreated());
-    }
-
-    /*
      * 어드민 겸직 MEMBER가 ROOM-03을 호출할 수 있는지 검증한다. ADMIN은 Authority 값이
-     * 아니라 member.is_admin 겸직 플래그이므로, hasAnyRole('OWNER', 'ADMIN')이 base role과
+     * 아니라 member.is_admin 겸직 플래그이므로, hasRole('ADMIN')이 base role과
      * 무관하게 ROLE_ADMIN 겸직자를 통과시키는지가 핵심이다.
      */
     @Test
@@ -259,4 +247,61 @@ class MeetingRoomCommandSecurityTest {
         /* @PreAuthorize에서 거절된 요청은 ROOM-05 유스케이스에 도달하면 안 된다. */
         verifyNoInteractions(deactivateMeetingRoomUseCase);
     }
+
+    @ParameterizedTest
+    @CsvSource({
+            "OWNER, POST", "OWNER, PATCH", "OWNER, DELETE",
+            "LEADER, POST", "LEADER, PATCH", "LEADER, DELETE",
+            "MEMBER, POST", "MEMBER, PATCH", "MEMBER, DELETE"
+    })
+    @DisplayName("관리자 겸직 없는 모든 기본 역할의 명령을 MR-004로 거절한다")
+    void rejectsCommandsWithoutAdminFlag(String role, String method) throws Exception {
+        String token = jwtTokenProvider.createAccessToken(new AuthPrincipal(1L, 10L, role, false, null));
+        mockMvc.perform(request(HttpMethod.valueOf(method), method.equals("POST") ? "/api/rooms" : "/api/rooms/2")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"대회의실\",\"location\":\"본관 3층\"}"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.errorCode").value("MR-004"));
+        verifyNoInteractions(createMeetingRoomUseCase, updateMeetingRoomUseCase, deactivateMeetingRoomUseCase);
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+            "OWNER, POST", "OWNER, PATCH", "OWNER, DELETE",
+            "LEADER, POST", "LEADER, PATCH", "LEADER, DELETE",
+            "MEMBER, POST", "MEMBER, PATCH", "MEMBER, DELETE"
+    })
+    @DisplayName("JWT 관리자 겸직자는 기본 역할과 무관하게 명령을 실행한다")
+    void allowsCommandsWithAdminFlag(String role, String method) throws Exception {
+        if (method.equals("POST")) {
+            when(createMeetingRoomUseCase.createMeetingRoom(any())).thenReturn(new MeetingRoomCreationResult(101L));
+        } else if (method.equals("PATCH")) {
+            when(updateMeetingRoomUseCase.updateMeetingRoom(any()))
+                    .thenReturn(new MeetingRoomUpdateResult(2L, "대회의실", "본관 3층"));
+        }
+        String token = jwtTokenProvider.createAccessToken(new AuthPrincipal(1L, 10L, role, true, null));
+        mockMvc.perform(request(HttpMethod.valueOf(method), method.equals("POST") ? "/api/rooms" : "/api/rooms/2")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"대회의실\",\"location\":\"본관 3층\"}"))
+                .andExpect(status().is(method.equals("POST") ? 201 : 200));
+        if (method.equals("PATCH")) {
+            verify(updateMeetingRoomUseCase).updateMeetingRoom(argThat(command ->
+                    command.requesterAdmin() && command.companyId().equals(10L)));
+        } else if (method.equals("DELETE")) {
+            verify(deactivateMeetingRoomUseCase).deactivateMeetingRoom(argThat(command ->
+                    command.requesterAdmin() && command.companyId().equals(10L)));
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"OWNER", "LEADER", "MEMBER"})
+    @DisplayName("관리자 겸직이 없어도 기존 회의실 목록 조회는 허용한다")
+    void keepsRoomListingAccessible(String role) throws Exception {
+        String token = jwtTokenProvider.createAccessToken(new AuthPrincipal(1L, 10L, role, false, null));
+        mockMvc.perform(get("/api/rooms").header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk());
+    }
+
 }

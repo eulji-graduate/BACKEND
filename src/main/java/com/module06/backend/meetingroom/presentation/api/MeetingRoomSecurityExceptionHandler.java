@@ -24,7 +24,7 @@ public class MeetingRoomSecurityExceptionHandler {
     /* 추적 ID를 ErrorResponse에 동일하게 전달하기 위한 MDC 키다. */
     private static final String TRACE_ID_MDC_KEY = "traceId";
 
-    /* OWNER 또는 ADMIN이 아닌 사용자의 회의실 수정·비활성화 요청을 MR-004로 응답한다. */
+    /* 관리자 겸직자가 아닌 사용자의 회의실 수정·비활성화 요청을 MR-004로 응답한다. */
     @ExceptionHandler(AuthorizationDeniedException.class)
     public ResponseEntity<ErrorResponse> handleAuthorizationDenied(
             AuthorizationDeniedException exception,

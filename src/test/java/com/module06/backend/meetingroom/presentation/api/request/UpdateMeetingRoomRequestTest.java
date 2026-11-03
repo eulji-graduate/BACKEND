@@ -33,7 +33,7 @@ class UpdateMeetingRoomRequestTest {
         );
 
         /* location은 값도 없고 제공 플래그도 false여야 한다. */
-        UpdateMeetingRoomCommand command = request.toCommand(10L, "OWNER", 2L);
+        UpdateMeetingRoomCommand command = request.toCommand(10L, true, 2L);
         assertThat(command.locationProvided()).isFalse();
         assertThat(command.location()).isNull();
         assertThat(command.nameProvided()).isTrue();
@@ -55,7 +55,7 @@ class UpdateMeetingRoomRequestTest {
         );
 
         /* 값은 null이지만 제공 플래그는 true여서 서비스가 삭제로 해석할 수 있어야 한다. */
-        UpdateMeetingRoomCommand command = request.toCommand(10L, "ADMIN", 2L);
+        UpdateMeetingRoomCommand command = request.toCommand(10L, true, 2L);
         assertThat(command.locationProvided()).isTrue();
         assertThat(command.location()).isNull();
         assertThat(command.hasAnyChange()).isTrue();
