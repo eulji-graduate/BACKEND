@@ -9,8 +9,8 @@ services:
     environment:
       MYSQL_DATABASE: "${DB_NAME:-momo}"
       MYSQL_USER: "${DB_USERNAME:-momo}"
-      MYSQL_PASSWORD: "${DB_PASSWORD:momo1234}"
-      MYSQL_ROOT_PASSWORD: "${MYSQL_ROOT_PASSWORD:root}"
+      MYSQL_PASSWORD: "${DB_PASSWORD:?DB_PASSWORD is required}"
+      MYSQL_ROOT_PASSWORD: "${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD is required}"
       TZ: Asia/Seoul
 
     command:
@@ -43,15 +43,13 @@ services:
       - "127.0.0.1:6379:6379"
 
     environment:
-      REDIS_PASSWORD: redis1234
+      REDIS_PASSWORD: "${REDIS_PASSWORD:?REDIS_PASSWORD is required}"
 
     command:
       - sh
       - -ec
       - |
-        # 빈 비밀번호로 뜨는 것을 막는다. .env 가 없으면 compose 는 경고 한 줄만 남기고
-        # 빈 문자열을 넘기는데, 그러면 --requirepass "" 로 '무인증 Redis'가 조용히 기동된다.
-        # 실패가 아니라 조용한 성공이라 아무도 모른다 → 여기서 끊는다(운영 compose 와 동일한 가드).
+        # Compose 필수값 검사와 별도로 컨테이너 안에서도 빈 비밀번호 실행을 막는다.
         : "$${REDIS_PASSWORD:?REDIS_PASSWORD is required — 프로젝트 루트 .env 를 확인하세요(.env.example 참고)}"
 
         exec redis-server \
