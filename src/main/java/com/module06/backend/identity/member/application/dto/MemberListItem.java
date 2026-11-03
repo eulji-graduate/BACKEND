@@ -4,6 +4,7 @@ import java.time.LocalDate;
 
 import com.module06.backend.identity.member.domain.model.Authority;
 import com.module06.backend.identity.member.domain.model.MemberStatus;
+import com.module06.backend.identity.member.domain.model.PendingHandoverType;
 
 /**
  * 구성원 목록 행(§7-1). {@code roleLabel} 은 화면 "역할"(프론트엔드·백엔드)이고 검색 대상이 아니다 —
@@ -20,6 +21,7 @@ public record MemberListItem(
         boolean isAdmin,
         String roleLabel,
         MemberStatus workStatus,
-        LocalDate joinedOn
+        LocalDate joinedOn,
+        PendingHandoverType pendingHandoverType
 ) {
 }

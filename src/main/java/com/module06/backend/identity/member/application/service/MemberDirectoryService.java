@@ -437,7 +437,8 @@ public class MemberDirectoryService implements GetMembersUseCase, GetMemberOrgCh
 
     private MemberListItem toListItem(MemberRow row) {
         return new MemberListItem(row.memberId(), row.name(), row.teamName(), row.positionName(),
-                row.authority(), row.isAdmin(), row.roleLabel(), row.status(), row.joinedOn());
+                row.authority(), row.isAdmin(), row.roleLabel(), row.status(), row.joinedOn(),
+                row.status() == MemberStatus.WAITING ? row.pendingType() : null);
     }
 
     private MemberDetail toDetail(MemberRow row) {
