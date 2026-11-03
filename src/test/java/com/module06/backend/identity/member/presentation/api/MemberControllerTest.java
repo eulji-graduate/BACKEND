@@ -1,5 +1,6 @@
 package com.module06.backend.identity.member.presentation.api;
 
+import static org.hamcrest.Matchers.nullValue;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -18,6 +19,8 @@ import java.util.List;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
@@ -52,6 +55,7 @@ import com.module06.backend.identity.member.application.usecase.UpdateMemberAdmi
 import com.module06.backend.identity.member.application.usecase.UpdateMemberRoleUseCase;
 import com.module06.backend.identity.member.domain.model.Authority;
 import com.module06.backend.identity.member.domain.model.MemberStatus;
+import com.module06.backend.identity.member.domain.model.PendingHandoverType;
 
 /*
  * 구성원 관리 화면(§7)이 쓰는 키를 고정한다. 상세·역할변경·어드민토글 셋이 같은 응답 모양이라
@@ -424,13 +428,42 @@ class MemberControllerTest {
         verify(updateMemberAdminUseCase, never()).update(any());
     }
 
+    @ParameterizedTest
+    @EnumSource(PendingHandoverType.class)
+    @DisplayName("사원 목록은 휴직·오프보딩 대기 종류를 응답한다")
+    void listIncludesPendingHandoverType(PendingHandoverType type) throws Exception {
+        authenticateAs(1L);
+        MemberListItem member = new MemberListItem(3L, "이하윤", "개발팀", "선임",
+                Authority.MEMBER, true, "프론트엔드", MemberStatus.WAITING,
+                LocalDate.of(2022, 5, 10), type);
+        when(getMembersUseCase.getMembers(anyLong(), any(), any(), anyInt(), anyInt()))
+                .thenReturn(MemberPage.of(1L, 0, 10, List.of(member)));
+
+        mockMvc.perform(get("/api/members").param("size", "10"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.content[0].workStatus").value("WAITING"))
+                .andExpect(jsonPath("$.data.content[0].pendingHandoverType").value(type.name()));
+    }
+
+    @Test
+    @DisplayName("대기 신청이 없으면 pendingHandoverType 키와 명시적인 null을 반환한다")
+    void listIncludesNullWhenNoPendingHandover() throws Exception {
+        authenticateAs(1L);
+        when(getMembersUseCase.getMembers(anyLong(), any(), any(), anyInt(), anyInt())).thenReturn(page());
+
+        mockMvc.perform(get("/api/members"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.content[0].pendingHandoverType").hasJsonPath())
+                .andExpect(jsonPath("$.data.content[0].pendingHandoverType").value(nullValue()));
+    }
+
     /* ── 픽스처 ────────────────────────────────────────────────────────────── */
 
     private static MemberPage page() {
         return MemberPage.of(1L, 0, 20, List.of(
                 new MemberListItem(3L, "이하윤", "개발팀", "선임",
                         Authority.MEMBER, false, "프론트엔드",
-                        MemberStatus.ACTIVE, LocalDate.of(2022, 5, 10))));
+                        MemberStatus.ACTIVE, LocalDate.of(2022, 5, 10), null)));
     }
 
     private static MemberDetail detail() {

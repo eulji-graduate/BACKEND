@@ -169,6 +169,24 @@ class MemberDirectoryServiceTest {
 
         assertThat(leavePending.content()).extracting(m -> m.name()).containsExactly("휴직대기자");
         assertThat(offboardingPending.content()).extracting(m -> m.name()).containsExactly("퇴사대기자");
+        assertThat(leavePending.content()).extracting(m -> m.pendingHandoverType())
+                .containsExactly(PendingHandoverType.VACATION);
+        assertThat(offboardingPending.content()).extracting(m -> m.pendingHandoverType())
+                .containsExactly(PendingHandoverType.OFFBOARDING);
+
+    }
+
+    @Test
+    @DisplayName("전체 목록에서 신청 없는 재직자와 종류 미확인 대기자는 null을 전달한다")
+    void listReturnsNullWithoutKnownPendingRequest() {
+        FakeDirectory directory = new FakeDirectory();
+        directory.addActive(COMPANY_ID, "재직자", null, null);
+        directory.addWaiting(COMPANY_ID, "종류미확인", null);
+
+        MemberPage page = service(directory).getMembers(COMPANY_ID, MemberListFilter.ALL, null, 0, 10);
+
+        assertThat(page.content()).hasSize(2).allSatisfy(member ->
+                assertThat(member.pendingHandoverType()).isNull());
     }
 
     @Test
