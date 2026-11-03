@@ -1,8 +1,5 @@
 package com.module06.backend.meetingroom.application.service;
 
-import java.util.Locale;
-import java.util.Set;
-
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -25,9 +22,6 @@ import com.module06.backend.meetingroom.exception.MeetingRoomErrorCode;
 @RequiredArgsConstructor
 public class MeetingRoomUpdateService implements UpdateMeetingRoomUseCase {
 
-    /* 회의실 수정이 허용된 회사 역할 목록이다. */
-    private static final Set<String> MANAGEMENT_ROLES = Set.of("OWNER", "ADMIN");
-
     /* 활성 회의실 잠금 조회, 이름 중복 확인, 변경 저장을 수행하는 명령 저장소다. */
     private final MeetingRoomCommandRepository meetingRoomCommandRepository;
 
@@ -35,7 +29,7 @@ public class MeetingRoomUpdateService implements UpdateMeetingRoomUseCase {
     @Override
     @Transactional
     public MeetingRoomUpdateResult updateMeetingRoom(UpdateMeetingRoomCommand command) {
-        /* 웹 계층을 우회하는 호출도 역할과 기본 입력 계약을 동일하게 지키도록 먼저 검증한다. */
+        /* 웹 계층을 우회하는 호출도 관리자 여부와 기본 입력 계약을 동일하게 지키도록 먼저 검증한다. */
         validateCommand(command);
 
         /* 동일 회의실에 대한 동시 수정이 서로를 덮어쓰지 않도록 활성 행을 잠금 조회한다. */
@@ -66,22 +60,19 @@ public class MeetingRoomUpdateService implements UpdateMeetingRoomUseCase {
         return MeetingRoomUpdateResult.from(meetingRoomCommandRepository.save(updated));
     }
 
-    /* 인증·경로·역할·빈 PATCH 요청을 서비스 경계에서 검증한다. */
+    /* 인증·경로·관리자 여부·빈 PATCH 요청을 서비스 경계에서 검증한다. */
     private void validateCommand(UpdateMeetingRoomCommand command) {
-        /* 명령과 양수 식별자, 역할 값이 없으면 정상적인 수정 대상을 결정할 수 없다. */
+        /* 명령과 양수 식별자가 없으면 정상적인 수정 대상을 결정할 수 없다. */
         if (command == null
                 || command.companyId() == null
                 || command.companyId() <= 0L
                 || command.meetingRoomId() == null
-                || command.meetingRoomId() <= 0L
-                || command.requesterRole() == null
-                || command.requesterRole().isBlank()) {
+                || command.meetingRoomId() <= 0L) {
             throw new BusinessException(CommonErrorCode.INVALID_INPUT_VALUE);
         }
 
-        /* 웹 인가를 우회한 내부 호출도 OWNER·ADMIN 외에는 회의실을 변경하지 못하게 한다. */
-        String normalizedRole = command.requesterRole().trim().toUpperCase(Locale.ROOT);
-        if (!MANAGEMENT_ROLES.contains(normalizedRole)) {
+        /* 웹 인가를 우회한 내부 호출도 관리자 겸직자 외에는 회의실을 변경하지 못하게 한다. */
+        if (!command.requesterAdmin()) {
             throw new BusinessException(MeetingRoomErrorCode.MEETING_ROOM_MANAGEMENT_FORBIDDEN);
         }
 

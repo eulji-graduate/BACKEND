@@ -36,15 +36,15 @@ class MeetingRoomDeactivationServiceTest {
 
     /* 미래 예약이 없는 활성 회의실이 기존 속성을 유지한 채 비활성화되는지 검증한다. */
     @Test
-    @DisplayName("OWNER가 미래 예약 없는 회의실을 소프트 삭제한다")
+    @DisplayName("관리자 겸직자가 미래 예약 없는 회의실을 소프트 삭제한다")
     void deactivatesMeetingRoomWithoutFutureReservation() {
         /* 활성 회의실과 빈 예약 목록을 반환하는 저장소 대역을 준비한다. */
         RecordingCommandRepository commandRepository = new RecordingCommandRepository(existingRoom());
         RecordingReservationRepository reservationRepository = new RecordingReservationRepository(List.of());
         MeetingRoomDeactivationService service = service(commandRepository, reservationRepository);
 
-        /* 회사 10의 OWNER가 2번 회의실 비활성화를 실행한다. */
-        service.deactivateMeetingRoom(command("OWNER"));
+        /* 회사 10의 관리자 겸직자가 2번 회의실 비활성화를 실행한다. */
+        service.deactivateMeetingRoom(command(true));
 
         /* 저장된 회의실은 정확한 현재 시각에 비활성화되고 기존 속성을 유지해야 한다. */
         assertThat(commandRepository.savedMeetingRoom).isNotNull();
@@ -60,29 +60,29 @@ class MeetingRoomDeactivationServiceTest {
         assertThat(reservationRepository.capturedFrom).isEqualTo(LocalDateTime.of(2026, 8, 6, 9, 0));
     }
 
-    /* ADMIN 역할도 서비스의 관리 권한 검증을 통과하는지 확인한다. */
+    /* 관리자 겸직 플래그도 서비스의 관리 권한 검증을 통과하는지 확인한다. */
     @Test
-    @DisplayName("ADMIN도 회의실을 비활성화할 수 있다")
-    void allowsAdminRole() {
-        /* 정상 활성 회의실과 예약 없는 서비스로 ADMIN 요청을 실행한다. */
+    @DisplayName("관리자 겸직자도 회의실을 비활성화할 수 있다")
+    void allowsAdminFlag() {
+        /* 정상 활성 회의실과 예약 없는 서비스로 관리자 겸직 요청을 실행한다. */
         RecordingCommandRepository commandRepository = new RecordingCommandRepository(existingRoom());
         MeetingRoomDeactivationService service = service(
                 commandRepository,
                 new RecordingReservationRepository(List.of())
         );
 
-        /* 소문자·공백이 포함된 역할도 토큰 역할 정규화 규칙에 따라 ADMIN으로 처리한다. */
-        service.deactivateMeetingRoom(command(" admin "));
+        /* 기본 역할과 무관하게 관리자 겸직 플래그가 권한의 기준이다. */
+        service.deactivateMeetingRoom(command(true));
 
         /* 관리 권한을 통과해 비활성 상태가 저장돼야 한다. */
         assertThat(commandRepository.savedMeetingRoom).isNotNull();
         assertThat(commandRepository.savedMeetingRoom.isActive()).isFalse();
     }
 
-    /* 관리 역할이 아닌 내부 호출을 서비스에서도 차단하는지 검증한다. */
+    /* 관리자 겸직이 없는 내부 호출을 서비스에서도 차단하는지 검증한다. */
     @Test
-    @DisplayName("MEMBER의 비활성화 요청은 MR-004로 거절한다")
-    void rejectsNonManagementRole() {
+    @DisplayName("관리자 겸직이 없는 사용자의 비활성화 요청은 MR-004로 거절한다")
+    void rejectsNonAdminFlag() {
         /* 웹 @PreAuthorize를 우회해 서비스를 직접 호출하는 상황을 준비한다. */
         RecordingCommandRepository commandRepository = new RecordingCommandRepository(existingRoom());
         MeetingRoomDeactivationService service = service(
@@ -90,8 +90,8 @@ class MeetingRoomDeactivationServiceTest {
                 new RecordingReservationRepository(List.of())
         );
 
-        /* MEMBER 요청은 회의실 조회나 저장 전에 관리 권한 오류가 발생해야 한다. */
-        assertErrorCode(() -> service.deactivateMeetingRoom(command("MEMBER")), "MR-004");
+        /* 관리자 겸직이 없는 요청은 회의실 조회나 저장 전에 관리 권한 오류가 발생해야 한다. */
+        assertErrorCode(() -> service.deactivateMeetingRoom(command(false)), "MR-004");
         assertThat(commandRepository.lockCalls).isZero();
         assertThat(commandRepository.savedMeetingRoom).isNull();
     }
@@ -107,8 +107,8 @@ class MeetingRoomDeactivationServiceTest {
                 reservationRepository
         );
 
-        /* 정상 OWNER 요청이어도 회사 범위에서 활성 회의실을 찾지 못하면 404 계약이어야 한다. */
-        assertErrorCode(() -> service.deactivateMeetingRoom(command("OWNER")), "MR-001");
+        /* 정상 관리자 겸직자 요청이어도 회사 범위에서 활성 회의실을 찾지 못하면 404 계약이어야 한다. */
+        assertErrorCode(() -> service.deactivateMeetingRoom(command(true)), "MR-001");
         assertThat(reservationRepository.calls).isZero();
     }
 
@@ -128,7 +128,7 @@ class MeetingRoomDeactivationServiceTest {
         );
 
         /* 예정 예약이 존재하면 MR-005가 발생하고 비활성 상태를 저장하면 안 된다. */
-        assertErrorCode(() -> service.deactivateMeetingRoom(command("OWNER")), "MR-005");
+        assertErrorCode(() -> service.deactivateMeetingRoom(command(true)), "MR-005");
         assertThat(commandRepository.savedMeetingRoom).isNull();
     }
 
@@ -144,7 +144,7 @@ class MeetingRoomDeactivationServiceTest {
         );
 
         /* 양수가 아닌 인증 회사 식별자는 저장소 경계 전에 거절돼야 한다. */
-        DeactivateMeetingRoomCommand invalidCommand = new DeactivateMeetingRoomCommand(0L, "OWNER", 2L);
+        DeactivateMeetingRoomCommand invalidCommand = new DeactivateMeetingRoomCommand(0L, true, 2L);
         assertErrorCode(() -> service.deactivateMeetingRoom(invalidCommand), "Z-001");
         assertThat(commandRepository.lockCalls).isZero();
     }
@@ -159,9 +159,9 @@ class MeetingRoomDeactivationServiceTest {
     }
 
     /* 회사 10의 2번 회의실을 대상으로 역할별 비활성화 명령을 만든다. */
-    private DeactivateMeetingRoomCommand command(String role) {
+    private DeactivateMeetingRoomCommand command(boolean admin) {
         /* Access Token에서 가져올 회사와 역할, Path 식별자를 명령에 담는다. */
-        return new DeactivateMeetingRoomCommand(10L, role, 2L);
+        return new DeactivateMeetingRoomCommand(10L, admin, 2L);
     }
 
     /* 테스트에서 비활성화할 기존 활성 회의실을 만든다. */

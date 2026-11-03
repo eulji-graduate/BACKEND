@@ -35,7 +35,7 @@ import com.module06.backend.meetingroom.presentation.api.response.UpdateMeetingR
 /*
  * 회의실 등록·수정·비활성화 명령 REST API의 진입점이다.
  *
- * ROOM-03·04·05는 OWNER·ADMIN만 열 수 있으며 companyId는 Access Token principal에서만 읽는다.
+ * ROOM-03·04·05는 관리자 겸직자만 열 수 있으며 companyId는 Access Token principal에서만 읽는다.
  */
 @Tag(name = "Meeting Room", description = "회의실 조회 및 관리 API")
 @RestController
@@ -55,9 +55,9 @@ public class MeetingRoomCommandController {
     /* 인증 사용자의 회사에 새로운 활성 회의실을 등록한다. */
     @Operation(
             summary = "회의실 등록",
-            description = "로그인한 사용자의 회사에 30분 단위 이용 시간을 가진 회의실을 등록합니다."
+            description = "관리자 겸직자가 자기 회사의 회의실을 등록합니다. 이름과 위치만 입력합니다."
     )
-    @PreAuthorize("hasAnyRole('OWNER', 'ADMIN')")
+    @PreAuthorize("hasRole('ADMIN')")
     @ResponseStatus(HttpStatus.CREATED)
     @PostMapping
     public ApiResponse<CreateMeetingRoomResponse> createMeetingRoom(
@@ -77,12 +77,12 @@ public class MeetingRoomCommandController {
         );
     }
 
-    /* OWNER·ADMIN이 자기 회사의 활성 회의실 정보를 부분 수정한다. */
+    /* 관리자 겸직자가 자기 회사의 활성 회의실 정보를 부분 수정한다. */
     @Operation(
             summary = "회의실 정보 수정",
-            description = "회의실 이름·위치·이용 가능 시간을 부분 수정합니다."
+            description = "관리자 겸직자가 자기 회사의 회의실 이름·위치를 부분 수정합니다."
     )
-    @PreAuthorize("hasAnyRole('OWNER', 'ADMIN')")
+    @PreAuthorize("hasRole('ADMIN')")
     @PatchMapping("/{meetingRoomId}")
     public ApiResponse<UpdateMeetingRoomResponse> updateMeetingRoom(
             @Parameter(hidden = true)
@@ -91,9 +91,9 @@ public class MeetingRoomCommandController {
             @PathVariable Long meetingRoomId,
             @Valid @RequestBody UpdateMeetingRoomRequest request
     ) {
-        /* 인증 토큰의 회사·역할과 Path·본문을 결합해 ROOM-04 유스케이스를 실행한다. */
+        /* 인증 토큰의 회사·관리자 여부와 Path·본문을 결합해 ROOM-04 유스케이스를 실행한다. */
         MeetingRoomUpdateResult result = updateMeetingRoomUseCase.updateMeetingRoom(
-                request.toCommand(me.getCompanyId(), me.getAuthority(), meetingRoomId)
+                request.toCommand(me.getCompanyId(), me.isAdmin(), meetingRoomId)
         );
 
         /* 수정된 전체 회의실 상태를 명세의 200 OK 공통 응답으로 반환한다. */
@@ -103,12 +103,12 @@ public class MeetingRoomCommandController {
         );
     }
 
-    /* OWNER·ADMIN이 미래 예약이 없는 자기 회사의 활성 회의실을 비활성화한다. */
+    /* 관리자 겸직자가 미래 예약이 없는 자기 회사의 활성 회의실을 비활성화한다. */
     @Operation(
             summary = "회의실 비활성화",
-            description = "미래 예정 예약이 없는 활성 회의실을 소프트 삭제합니다."
+            description = "관리자 겸직자가 미래 예정 예약이 없는 자기 회사의 활성 회의실을 소프트 삭제합니다."
     )
-    @PreAuthorize("hasAnyRole('OWNER', 'ADMIN')")
+    @PreAuthorize("hasRole('ADMIN')")
     @DeleteMapping("/{meetingRoomId}")
     public ApiResponse<Void> deactivateMeetingRoom(
             @Parameter(hidden = true)
@@ -116,10 +116,10 @@ public class MeetingRoomCommandController {
             @Parameter(description = "비활성화할 회의실 식별자", required = true, example = "2")
             @PathVariable Long meetingRoomId
     ) {
-        /* 인증 토큰의 회사·역할과 Path 식별자를 결합해 ROOM-05 유스케이스를 실행한다. */
+        /* 인증 토큰의 회사·관리자 여부와 Path 식별자를 결합해 ROOM-05 유스케이스를 실행한다. */
         deactivateMeetingRoomUseCase.deactivateMeetingRoom(new DeactivateMeetingRoomCommand(
                 me.getCompanyId(),
-                me.getAuthority(),
+                me.isAdmin(),
                 meetingRoomId
         ));
 

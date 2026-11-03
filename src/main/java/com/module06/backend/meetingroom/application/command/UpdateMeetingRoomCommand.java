@@ -8,7 +8,7 @@ package com.module06.backend.meetingroom.application.command;
  */
 public record UpdateMeetingRoomCommand(
         Long companyId,
-        String requesterRole,
+        boolean requesterAdmin,
         Long meetingRoomId,
         boolean nameProvided,
         String name,
