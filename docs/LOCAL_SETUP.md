@@ -11,9 +11,9 @@ MySQL·Redis는 루트 `compose.yml`로 실행한다. 비어 있는 MySQL 볼륨
 ./gradlew bootRun --args='--spring.profiles.active=local'
 ```
 
-- 기본 연결: 백엔드 `http://localhost:8080`, MySQL `localhost:3306/module06`,
+- 기본 연결: 백엔드 `http://localhost:8080`, MySQL `localhost:3306/momo`,
   Redis `localhost:6379`, AI 서버 `http://localhost:8000`.
-- MySQL 계정 기본값은 `module06`이다. `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USERNAME`,
+- MySQL 계정 기본값은 `momo`이다. `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USERNAME`,
   `REDIS_HOST`, `REDIS_PORT`, `AI_BASE_URL`, `SERVER_PORT`로 연결 위치를 변경할 수 있다.
 - 비밀값 `DB_PASSWORD`, `REDIS_PASSWORD`, `JWT_SECRET`, `INTERNAL_TOKEN`은 기존 루트
   `application-secret.yml` 또는 실행 환경변수로 제공한다. AI 서버와 `INTERNAL_TOKEN`을
@@ -40,10 +40,10 @@ docker compose ps
   기존 `.env`는 자동 수정하지 않는다. 기존 파일에 없는 항목은 실행 셸의 환경변수로
   제공할 수 있다. Spring용 `application-secret.yml`을 Compose가 읽지는 않는다.
 - `DB_PASSWORD`와 `REDIS_PASSWORD`는 백엔드에 제공하는 값과 일치해야 한다.
-  root 비밀번호는 MySQL 관리용이며 백엔드는 `module06` 계정을 사용한다.
+  root 비밀번호는 MySQL 관리용이며 백엔드는 `momo` 계정을 사용한다.
 - `DB_PORT` 기본값은 `3306`이다. 포트 충돌로 변경한다면 백엔드 실행 환경에도
   같은 값을 제공한다. Redis는 `127.0.0.1:6379`를 사용한다.
-- 관리 앱 연결: 호스트 `127.0.0.1`, 포트 `3306`, DB·사용자 `module06`
+- 관리 앱 연결: 호스트 `127.0.0.1`, 포트 `3306`, DB·사용자 `momo`
   (각각 변경했다면 변경한 값). 비밀번호는 제공한 `DB_PASSWORD`다.
 - 최초 실행 시 DB·앱 계정과 함께 `db/local/schema.sql`, `db/local/data.sql`이 적용된다.
   파일은 컨테이너에 읽기 전용으로 마운트한다.
@@ -59,8 +59,9 @@ MySQL 초기 계정·비밀번호·DB 생성 설정은 **비어 있는 데이터
 
 ### 시연 계정과 데이터
 
-기업 코드 **`ZDEMO`**, 공통 비밀번호 **`Demo1234!`**. 공개된 로컬 시연 전용 자격증명이며
-실제 계정에 사용하지 않는다. DB에는 BCrypt 해시만 저장한다.
+기업 코드는 **`ZDEMO`**다. 시연 로그인 비밀번호는 팀 내 별도 경로로 공유하며
+문서·SQL 주석·저장소에 평문을 적지 않는다. DB에는 BCrypt 해시만 저장한다.
+비밀번호를 변경할 경우 `data.sql`의 BCrypt 해시도 함께 갱신해야 한다.
 
 | ID | 이름 | 로그인 이메일 | 권한 | 상태 |
 |---|---|---|---|---|
@@ -76,12 +77,20 @@ MySQL 초기 계정·비밀번호·DB 생성 설정은 **비어 있는 데이터
 | 10 | 한소율 | soyul@zgroup.co.kr | MEMBER | ACTIVE |
 
 - 회사는 온보딩 완료, 구독은 ACTIVE이며 초기화일을 포함하는 월 단위 기간을 갖는다.
-- 4개 부서, 프로젝트 2개, 회의실 2개, 완료·예정 회의 각 1개, 업무 6개,
-  휴직·퇴사 인수인계 각 1개, 토큰·텍스트 저장량·개인 Todo 데이터가 포함된다.
+- 4개 부서, 업무 흐름용 프로젝트 2개와 저장소 시연용 프로젝트 5개, 회의실 4개,
+  완료 회의 11개·예정 회의 1개, 업무 8개, 휴직·퇴사 인수인계 각 1개가 포함된다.
+- 이하윤의 완료 업무 1개는 이력에 유지하고 미완료 업무를 1개 추가해 휴직 인계는 3건으로 구성한다.
+  임지안의 업무는 중간 승인 완료 상태에 맞춰 정민석에게 재배정돼 있다.
 - 이하윤은 팀장 중간 승인 대기, 임지안은 재분배·중간 승인 완료 후 최종 승인 대기다.
   인수인계 상태는 실제 코드의 SUBMITTED/REASSIGNED를 따른다.
 - 회의록·요약·사용량·결제 이력은 사전 작성 데이터다. 실제 녹음 파일이나 실결제는 없다.
-  음성 저장량을 임의로 만들지 않고 실제 시드 텍스트의 바이트 수를 집계한다.
+- 저장소 5개 프로젝트의 합성 집계값은 음성 37,473,589,657바이트(34.9GB),
+  텍스트 7,301,444,403바이트(6.8GB), 합계 41.7GB이며 한도는 50GB다.
+  GB 표시는 1024³ 기준 소수점 1자리 반올림이다. 실제 로컬 디스크 사용량과는 다르다.
+- `hr-process`, `ops-automation`은 DONE으로 집계 삭제 시연이 가능하다.
+  삭제 후 BE 사용량은 줄지만 FE 구독 더미 수치는 그대로이므로 삭제를 마지막에 시연한다.
+- 저장소 시연용 회의는 프로젝트마다 2개이며 마지막 집계일은 초기화일 기준
+  product-v2 -3일, infra-migration -8일, marketing-q3 -5일, hr-process -130일, ops-automation -260일이다.
 - 날짜는 KST 기준 초기화 시점으로 계산한다. 재시작만으로 날짜를 갱신하지는 않는다.
 
 ### 기존 빈 DB 초기화 / 시연 데이터 복구
@@ -117,6 +126,11 @@ SQL 실패 시 원인을 해결한 뒤 DB 상태를 확인해야 한다. 초기�
 ```bash
 ./gradlew localSqlCheck
 ```
+
+로그인 비밀번호를 검증 실행 환경의 `DEMO_LOGIN_PASSWORD`로 제공하면 실제 BCrypt 일치 검사와
+Owner·Leader·대기 관리자 로그인 및 관리자 API 호출도 검사한다. 값을 제공하지 않으면
+로그인·관리 API 시나리오 1개만 건너뛰며, 나머지 스키마·데이터·승인 흐름 검증은 실행한다.
+비밀번호 값은 별도 공유받아 입력하고 문서·스크립트·저장소에는 기록하지 않는다.
 
 ---
 
