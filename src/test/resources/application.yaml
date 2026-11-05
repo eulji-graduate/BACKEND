@@ -1,6 +1,7 @@
 spring:
   datasource:
-    url: jdbc:h2:mem:testdb;MODE=MySQL
+    # 컨텍스트별 DB 분리: 캐시에서 제거된 컨텍스트의 create-drop이 다른 테스트의 테이블을 삭제하지 않도록 한다.
+    url: jdbc:h2:mem:${random.uuid};MODE=MySQL
     driver-class-name: org.h2.Driver
     username: sa
     password: ""
