@@ -358,7 +358,7 @@ class MemberControllerTest {
         mockMvc.perform(patch("/api/members/3")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"role":"LEADER","jobPositionId":6}
+                                {"role":"LEADER","jobPositionId":6,"teamId":9}
                                 """))
                 .andExpect(status().isOk());
 
@@ -370,6 +370,7 @@ class MemberControllerTest {
         assertThat(command.targetMemberId()).isEqualTo(3L);
         assertThat(command.role()).isEqualTo(Authority.LEADER);
         assertThat(command.jobPositionId()).isEqualTo(6L);
+        assertThat(command.teamId()).isEqualTo(9L);
     }
 
     @Test

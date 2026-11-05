@@ -166,6 +166,10 @@ public class MemberJpaEntity {
         }
     }
 
+    public void changeTeam(TeamRefEntity team) {
+        this.team = team;
+    }
+
     /** 관리 권한(겸직) 부여·회수(§7-7). role 은 건드리지 않는다 — 그게 이 모델의 요점이다. */
     public void changeAdmin(boolean isAdmin) {
         this.isAdmin = isAdmin;

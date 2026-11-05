@@ -343,6 +343,61 @@ class MemberDirectoryServiceTest {
     }
 
     @Test
+    void movesTeamAndClearsPreviousRoleWhenRoleOmitted() {
+        FakeDirectory directory = new FakeDirectory();
+        FakeTeamRepository teams = new FakeTeamRepository();
+        Team destination = teams.create(COMPANY_ID, "새 팀");
+        FakePositionRepository positions = new FakePositionRepository();
+        Position position = positions.create(COMPANY_ID, "사원", Authority.MEMBER, "설명");
+        Long id = directory.addActiveWithRoleLabel(COMPANY_ID, "대상", 99L, "이전 팀", "백엔드");
+        MemberDetail detail = service(directory, teams, positions).update(
+                new UpdateMemberRoleCommand(COMPANY_ID, 999L, id, Authority.MEMBER,
+                        position.id(), null, destination.id()));
+        assertThat(detail.teamId()).isEqualTo(destination.id());
+        assertThat(detail.roleLabel()).isEqualTo("없음");
+    }
+
+    @Test
+    void movingValidatesRoleAgainstDestinationTeam() {
+        FakeDirectory directory = new FakeDirectory();
+        FakeTeamRepository teams = new FakeTeamRepository();
+        Team destination = teams.create(COMPANY_ID, "새 팀");
+        FakePositionRepository positions = new FakePositionRepository();
+        Position position = positions.create(COMPANY_ID, "사원", Authority.MEMBER, "설명");
+        Long id = directory.addActiveWithRoleLabel(COMPANY_ID, "대상", 99L, "이전 팀", "백엔드");
+        directory.addRole(COMPANY_ID, 99L, 70L, "이전 역할");
+        directory.addRole(COMPANY_ID, destination.id(), 71L, "새 역할");
+        MemberDirectoryService service = service(directory, teams, positions);
+        assertThatThrownBy(() -> service.update(new UpdateMemberRoleCommand(COMPANY_ID, 999L, id,
+                Authority.MEMBER, position.id(), 70L, destination.id())))
+                .isInstanceOf(BusinessException.class);
+        assertThat(service.getDetail(COMPANY_ID, id).teamId()).isEqualTo(99L);
+        MemberDetail changed = service.update(new UpdateMemberRoleCommand(COMPANY_ID, 999L, id,
+                Authority.MEMBER, position.id(), 71L, destination.id()));
+        assertThat(changed.teamId()).isEqualTo(destination.id());
+        assertThat(changed.roleLabel()).isEqualTo("새 역할");
+    }
+
+    @Test
+    void rejectsMissingAndForeignDestinationTeams() {
+        FakeDirectory directory = new FakeDirectory();
+        FakeTeamRepository teams = new FakeTeamRepository();
+        Team foreign = teams.create(2L, "타사 팀");
+        FakePositionRepository positions = new FakePositionRepository();
+        Position position = positions.create(COMPANY_ID, "사원", Authority.MEMBER, "설명");
+        Long id = directory.addActive(COMPANY_ID, "대상", null, null);
+        for (Long teamId : List.of(foreign.id(), 99999L)) {
+            assertThatThrownBy(() -> service(directory, teams, positions).update(
+                    new UpdateMemberRoleCommand(COMPANY_ID, 999L, id, Authority.MEMBER,
+                            position.id(), null, teamId)))
+                    .isInstanceOf(BusinessException.class)
+                    .extracting(e -> ((BusinessException) e).getErrorCode())
+                    .isEqualTo(AuthErrorCode.TEAM_NOT_FOUND);
+        }
+        assertThat(service(directory).getDetail(COMPANY_ID, id).teamId()).isNull();
+    }
+
+    @Test
     @DisplayName("역할 id 를 보내면 그 역할로 바뀐다")
     void changesRole() {
         FakeDirectory directory = new FakeDirectory();
@@ -951,9 +1006,10 @@ class MemberDirectoryServiceTest {
         }
 
         @Override
-        public void updateRoleAndPosition(Long memberId, Authority authority, Long positionId, Long roleId) {
+        public void updateRoleAndPosition(Long memberId, Authority authority, Long positionId, Long roleId, Long teamId) {
             MutableRow row = rows.get(memberId);
             row.authority = authority;
+            if (teamId != null) { row.teamId = teamId; }
             if (roleId != null) {
                 row.roleLabel = labelOf(roleId);
             }
@@ -1030,7 +1086,7 @@ class MemberDirectoryServiceTest {
             final Long companyId;
             final String name;
             final String email;
-            final Long teamId;
+            Long teamId;
             final String teamName;
             String roleLabel;
             Authority authority;
