@@ -608,7 +608,7 @@ class CompanyOnboardingCommitterTest {
         private final Map<Long, Boolean> adminUpdates = new HashMap<>();
 
         @Override
-        public void updateRoleAndPosition(Long memberId, Authority authority, Long positionId, Long roleId) {
+        public void updateRoleAndPosition(Long memberId, Authority authority, Long positionId, Long roleId, Long teamId) {
         }
 
         @Override

@@ -6,11 +6,12 @@ import com.module06.backend.identity.member.domain.model.Authority;
 public interface MemberDirectoryCommandPort {
 
     /**
-     * §7-4. 권한·직급·역할 라벨을 한 트랜잭션에 같이 바꾼다 — 따로 두면 중간 상태가 저장된다.
+     * §7-4. 권한·직급·팀·역할 라벨을 한 트랜잭션에 같이 바꾼다 — 따로 두면 중간 상태가 저장된다.
      *
-     * @param roleId null 이면 역할 라벨을 그대로 둔다. 권한·직급과 달리 이 값만 선택이다
+     * @param roleId null 이면 역할 라벨을 그대로 둔다
+     * @param teamId null 이면 기존 팀을 유지한다
      */
-    void updateRoleAndPosition(Long memberId, Authority authority, Long positionId, Long roleId);
+    void updateRoleAndPosition(Long memberId, Authority authority, Long positionId, Long roleId, Long teamId);
 
     /**
      * §7 사원 삭제. 물리 삭제하지 않는다 — 회의·인수인계가 이 행을 참조하고 있어 지우면 이력이

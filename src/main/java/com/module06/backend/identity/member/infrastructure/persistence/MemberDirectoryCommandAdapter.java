@@ -42,11 +42,14 @@ public class MemberDirectoryCommandAdapter implements MemberDirectoryCommandPort
      * 원시 SQL 예외 대신 {@code MEMBER_TEAM_LEADER_ALREADY_EXISTS} 로 변환한다.
      */
     @Override
-    public void updateRoleAndPosition(Long memberId, Authority authority, Long positionId, Long roleId) {
+    public void updateRoleAndPosition(Long memberId, Authority authority, Long positionId, Long roleId, Long teamId) {
         MemberJpaEntity member = find(memberId);
         PositionRefEntity position = entityManager.getReference(PositionRefEntity.class, positionId);
         RoleRefEntity role = roleId == null ? null : entityManager.getReference(RoleRefEntity.class, roleId);
         member.changeRoleAndPosition(authority, position, role);
+        if (teamId != null) {
+            member.changeTeam(entityManager.getReference(TeamRefEntity.class, teamId));
+        }
         try {
             memberRepository.flush();
         } catch (DataIntegrityViolationException exception) {

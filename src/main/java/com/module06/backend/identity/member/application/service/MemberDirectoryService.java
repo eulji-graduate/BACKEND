@@ -69,6 +69,9 @@ public class MemberDirectoryService implements GetMembersUseCase, GetMemberOrgCh
         GetMemberDashboardSummaryUseCase, GetTeamLeadersStatusUseCase, DeleteMemberUseCase,
         GetTeamRosterUseCase {
 
+    /** 전 회사 공용 시스템 역할 "없음"(V2.3.9). */
+    private static final Long ROLE_NONE_ID = 2L;
+
     /** 조직도의 팀 미배정 묶음 이름. 실제 team 행이 아니라 응답에만 있는 잔여 묶음이다(§7-2). */
     private static final String UNASSIGNED_TEAM_NAME = "미배정";
 
@@ -275,8 +278,7 @@ public class MemberDirectoryService implements GetMembersUseCase, GetMemberOrgCh
 
     /**
      * 권한 상승 방어선(§7-4): role 검증 → 대상 조회 → 본인·오너 차단 → 직급 회사 스코프 검증
-     * 순서로 막는다. 팀장 교체는 대상의 <b>현재 소속 팀</b>(row.teamId)을 기준으로 한다 — 팀장
-     * 지정 전용 엔드포인트가 폐기되며(§6-5) teamId 파라미터 자체가 없어졌다.
+     * 순서로 막는다. 팀 이동 시 역할은 도착 팀을 기준으로 검증하며 기존 팀장 지정을 정리한다.
      */
     @Override
     @Transactional
@@ -294,18 +296,30 @@ public class MemberDirectoryService implements GetMembersUseCase, GetMemberOrgCh
         }
         positionRepository.findByIdAndCompanyId(command.jobPositionId(), command.companyId())
                 .orElseThrow(() -> new BusinessException(AuthErrorCode.POSITION_NOT_FOUND));
-        assertRoleAssignable(command.companyId(), target.teamId(), command.roleId());
+        Long effectiveTeamId = command.teamId() != null ? command.teamId() : target.teamId();
+        boolean moving = !Objects.equals(target.teamId(), effectiveTeamId);
+        if (command.teamId() != null) {
+            teamRepository.findByIdAndCompanyId(effectiveTeamId, command.companyId())
+                    .orElseThrow(() -> new BusinessException(AuthErrorCode.TEAM_NOT_FOUND));
+        }
+        Long effectiveRoleId = moving && command.roleId() == null ? ROLE_NONE_ID : command.roleId();
+        assertRoleAssignable(command.companyId(), effectiveTeamId, effectiveRoleId);
 
-        applyLeaderSideEffects(command.companyId(), target, command.role());
+        if (moving && target.teamId() != null) {
+            teamRepository.findByIdAndCompanyId(target.teamId(), command.companyId())
+                    .filter(team -> target.memberId().equals(team.leaderMemberId()))
+                    .ifPresent(team -> teamRepository.updateLeader(team.id(), null));
+        }
+        applyLeaderSideEffects(command.companyId(), target, command.role(), effectiveTeamId);
         commandPort.updateRoleAndPosition(command.targetMemberId(), command.role(), command.jobPositionId(),
-                command.roleId());
+                effectiveRoleId, command.teamId());
         refreshTokenStore.revokeAllByMember(command.targetMemberId());
 
         return getDetail(command.companyId(), command.targetMemberId());
     }
 
     /**
-     * 역할은 선택 값이라 안 보내면(null) 그대로 둔다. 보냈으면 이 회사·대상의 <b>현재 소속 부서</b>에
+     * 역할은 선택 값이라 안 보내면(null) 그대로 둔다. 보냈으면 이 회사·대상의 <b>변경 후 소속 부서</b>에
      * 있는 역할이어야 한다 — 없는 역할을 조용히 "없음"으로 접으면 사용자가 고른 역할이 사라진 채
      * 200 이 나간다.
      *
@@ -356,11 +370,11 @@ public class MemberDirectoryService implements GetMembersUseCase, GetMemberOrgCh
         refreshTokenStore.revokeAllByMember(command.targetMemberId());
     }
 
-    private void applyLeaderSideEffects(Long companyId, MemberRow target, Authority newRole) {
-        if (target.teamId() == null) {
+    private void applyLeaderSideEffects(Long companyId, MemberRow target, Authority newRole, Long teamId) {
+        if (teamId == null) {
             return;
         }
-        Team team = teamRepository.findByIdAndCompanyId(target.teamId(), companyId).orElse(null);
+        Team team = teamRepository.findByIdAndCompanyId(teamId, companyId).orElse(null);
         if (team == null) {
             return;
         }

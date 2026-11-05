@@ -295,7 +295,7 @@ class MyProfileServiceTest {
         private Long updatedRoleAndPositionMemberId;
 
         @Override
-        public void updateRoleAndPosition(Long memberId, Authority authority, Long positionId, Long roleId) {
+        public void updateRoleAndPosition(Long memberId, Authority authority, Long positionId, Long roleId, Long teamId) {
             this.updatedRoleAndPositionMemberId = memberId;
         }
 
