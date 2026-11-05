@@ -278,7 +278,7 @@ public class MemberDirectoryService implements GetMembersUseCase, GetMemberOrgCh
 
     /**
      * 권한 상승 방어선(§7-4): role 검증 → 대상 조회 → 본인·오너 차단 → 직급 회사 스코프 검증
-     * 순서로 막는다. 팀 이동 시 역할은 도착 팀을 기준으로 검증하며 기존 팀장 지정을 정리한다.
+     * 순서로 막는다. 역할은 도착 팀을 기준으로 검증하고, 팀장 중복·공석 발생을 쓰기 전에 차단한다.
      */
     @Override
     @Transactional
@@ -305,12 +305,10 @@ public class MemberDirectoryService implements GetMembersUseCase, GetMemberOrgCh
         Long effectiveRoleId = moving && command.roleId() == null ? ROLE_NONE_ID : command.roleId();
         assertRoleAssignable(command.companyId(), effectiveTeamId, effectiveRoleId);
 
-        if (moving && target.teamId() != null) {
-            teamRepository.findByIdAndCompanyId(target.teamId(), command.companyId())
-                    .filter(team -> target.memberId().equals(team.leaderMemberId()))
-                    .ifPresent(team -> teamRepository.updateLeader(team.id(), null));
+        validateLeaderChange(command.companyId(), target, command.role(), effectiveTeamId);
+        if (command.role() == Authority.LEADER) {
+            teamRepository.updateLeader(effectiveTeamId, target.memberId());
         }
-        applyLeaderSideEffects(command.companyId(), target, command.role(), effectiveTeamId);
         commandPort.updateRoleAndPosition(command.targetMemberId(), command.role(), command.jobPositionId(),
                 effectiveRoleId, command.teamId());
         refreshTokenStore.revokeAllByMember(command.targetMemberId());
@@ -370,24 +368,26 @@ public class MemberDirectoryService implements GetMembersUseCase, GetMemberOrgCh
         refreshTokenStore.revokeAllByMember(command.targetMemberId());
     }
 
-    private void applyLeaderSideEffects(Long companyId, MemberRow target, Authority newRole, Long teamId) {
-        if (teamId == null) {
-            return;
+    /** Validate both teams before any writes or refresh-token revocation. */
+    private void validateLeaderChange(Long companyId, MemberRow target, Authority newRole, Long teamId) {
+        Team currentTeam = target.teamId() == null ? null
+                : teamRepository.findByIdAndCompanyId(target.teamId(), companyId).orElse(null);
+        boolean currentLeader = target.authority() == Authority.LEADER
+                || (currentTeam != null && target.memberId().equals(currentTeam.leaderMemberId()));
+        if (currentLeader && target.teamId() != null
+                && (newRole != Authority.LEADER || !Objects.equals(target.teamId(), teamId))) {
+            throw new BusinessException(AuthErrorCode.MEMBER_TEAM_LEADER_REQUIRED);
         }
-        Team team = teamRepository.findByIdAndCompanyId(teamId, companyId).orElse(null);
-        if (team == null) {
-            return;
-        }
-
         if (newRole == Authority.LEADER) {
-            if (team.leaderMemberId() != null && !team.leaderMemberId().equals(target.memberId())) {
-                commandPort.demoteToMember(team.leaderMemberId());
-                /* 강등된 구성원의 토큰에는 LEADER 권한이 담겨 있다 — 안 폐기하면 access TTL 동안 살아 있다. */
-                refreshTokenStore.revokeAllByMember(team.leaderMemberId());
+            Team destination = teamId == null ? null
+                    : teamRepository.findByIdAndCompanyId(teamId, companyId).orElse(null);
+            if (destination == null) {
+                throw new BusinessException(AuthErrorCode.TEAM_NOT_FOUND);
             }
-            teamRepository.updateLeader(team.id(), target.memberId());
-        } else if (target.authority() == Authority.LEADER && target.memberId().equals(team.leaderMemberId())) {
-            teamRepository.updateLeader(team.id(), null);
+            if (destination.leaderMemberId() != null
+                    && !target.memberId().equals(destination.leaderMemberId())) {
+                throw new BusinessException(AuthErrorCode.MEMBER_TEAM_LEADER_ALREADY_EXISTS);
+            }
         }
     }
 

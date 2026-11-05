@@ -591,46 +591,45 @@ class MemberDirectoryServiceTest {
     }
 
     @Test
-    @DisplayName("LEADER 로 승격하면 기존 팀장을 MEMBER 로 내리고, 신규·기존 리더 양쪽 refresh 를 폐기한다")
-    void promotingToLeaderSwapsExistingLeaderAndRevokesBothTokens() {
+    void rejectsReplacingLeaderWithoutChangingMembersOrTokens() {
         FakeDirectory directory = new FakeDirectory();
         FakeTeamRepository teams = new FakeTeamRepository();
         FakePositionRepository positions = new FakePositionRepository();
         Team team = teams.create(COMPANY_ID, "개발팀");
         Position position = positions.create(COMPANY_ID, "선임", Authority.LEADER, "설명");
-
-        Long existingLeaderId = directory.addActiveWithAuthority(COMPANY_ID, "기존리더", team.id(), "개발팀", Authority.LEADER);
-        teams.setLeader(team.id(), existingLeaderId);
-        Long newLeaderId = directory.addActiveWithAuthority(COMPANY_ID, "신규리더", team.id(), "개발팀", Authority.MEMBER);
-
-        FakeRefreshTokenStore tokenStore = new FakeRefreshTokenStore();
-        MemberDetail detail = service(directory, teams, positions, tokenStore).update(
-                new UpdateMemberRoleCommand(COMPANY_ID, 999L, newLeaderId, Authority.LEADER, position.id(), null));
-
-        assertThat(detail.role()).isEqualTo(Authority.LEADER);
-        assertThat(teams.findByIdAndCompanyId(team.id(), COMPANY_ID).orElseThrow().leaderMemberId())
-                .isEqualTo(newLeaderId);
-        assertThat(directory.findActiveById(COMPANY_ID, existingLeaderId).orElseThrow().authority())
-                .isEqualTo(Authority.MEMBER);
-        assertThat(tokenStore.revokedMemberIds).contains(newLeaderId, existingLeaderId);
+        Long oldLeader = directory.addActiveWithAuthority(COMPANY_ID, "기존", team.id(), "개발팀", Authority.LEADER);
+        Long candidate = directory.addActiveWithAuthority(COMPANY_ID, "후보", team.id(), "개발팀", Authority.MEMBER);
+        teams.setLeader(team.id(), oldLeader);
+        FakeRefreshTokenStore tokens = new FakeRefreshTokenStore();
+        assertThatThrownBy(() -> service(directory, teams, positions, tokens).update(
+                new UpdateMemberRoleCommand(COMPANY_ID, 999L, candidate, Authority.LEADER, position.id(), null)))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException)e).getErrorCode())
+                .isEqualTo(AuthErrorCode.MEMBER_TEAM_LEADER_ALREADY_EXISTS);
+        assertThat(directory.findActiveById(COMPANY_ID, candidate).orElseThrow().authority()).isEqualTo(Authority.MEMBER);
+        assertThat(directory.findActiveById(COMPANY_ID, oldLeader).orElseThrow().authority()).isEqualTo(Authority.LEADER);
+        assertThat(teams.findByIdAndCompanyId(team.id(), COMPANY_ID).orElseThrow().leaderMemberId()).isEqualTo(oldLeader);
+        assertThat(tokens.revokedMemberIds).isEmpty();
     }
 
     @Test
-    @DisplayName("팀장을 MEMBER 로 내리면 팀의 leaderMemberId 가 비워진다")
-    void demotingLeaderClearsTeamLeader() {
+    void rejectsDemotingLeaderWithoutChangingSeatOrTokens() {
         FakeDirectory directory = new FakeDirectory();
         FakeTeamRepository teams = new FakeTeamRepository();
         FakePositionRepository positions = new FakePositionRepository();
         Team team = teams.create(COMPANY_ID, "개발팀");
         Position position = positions.create(COMPANY_ID, "사원", Authority.MEMBER, "설명");
-
-        Long leaderId = directory.addActiveWithAuthority(COMPANY_ID, "리더", team.id(), "개발팀", Authority.LEADER);
-        teams.setLeader(team.id(), leaderId);
-
-        service(directory, teams, positions).update(
-                new UpdateMemberRoleCommand(COMPANY_ID, 999L, leaderId, Authority.MEMBER, position.id(), null));
-
-        assertThat(teams.findByIdAndCompanyId(team.id(), COMPANY_ID).orElseThrow().leaderMemberId()).isNull();
+        Long leader = directory.addActiveWithAuthority(COMPANY_ID, "리더", team.id(), "개발팀", Authority.LEADER);
+        teams.setLeader(team.id(), leader);
+        FakeRefreshTokenStore tokens = new FakeRefreshTokenStore();
+        assertThatThrownBy(() -> service(directory, teams, positions, tokens).update(
+                new UpdateMemberRoleCommand(COMPANY_ID, 999L, leader, Authority.MEMBER, position.id(), null)))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException)e).getErrorCode())
+                .isEqualTo(AuthErrorCode.MEMBER_TEAM_LEADER_REQUIRED);
+        assertThat(teams.findByIdAndCompanyId(team.id(), COMPANY_ID).orElseThrow().leaderMemberId()).isEqualTo(leader);
+        assertThat(directory.findActiveById(COMPANY_ID, leader).orElseThrow().authority()).isEqualTo(Authority.LEADER);
+        assertThat(tokens.revokedMemberIds).isEmpty();
     }
 
     @Test

@@ -199,7 +199,10 @@ public enum AuthErrorCode implements ErrorCode {
     PASSWORD_RESET_ACCOUNT_NOT_FOUND(HttpStatus.NOT_FOUND, "AU-049",
             "등록되지 않은 계정입니다. 기업 코드와 이메일을 확인해 주세요."),
     PASSWORD_RESET_MAIL_FAILED(HttpStatus.SERVICE_UNAVAILABLE, "AU-050",
-            "메일 발송에 실패했습니다. 잠시 후 다시 시도해 주세요.");
+            "메일 발송에 실패했습니다. 잠시 후 다시 시도해 주세요."),
+
+    MEMBER_TEAM_LEADER_REQUIRED(HttpStatus.CONFLICT, "AU-051",
+            "팀장 공석이 발생하므로 팀장의 권한 또는 소속 팀을 변경할 수 없습니다.");
 
     private final HttpStatus httpStatus;
     private final String code;

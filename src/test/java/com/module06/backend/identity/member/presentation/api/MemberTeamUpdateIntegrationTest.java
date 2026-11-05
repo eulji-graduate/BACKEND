@@ -2,6 +2,7 @@ package com.module06.backend.identity.member.presentation.api;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.authentication;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -9,6 +10,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import java.util.ArrayList;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -76,22 +78,80 @@ class MemberTeamUpdateIntegrationTest {
 
     @ParameterizedTest
     @CsvSource({"MEMBER", "LEADER"})
-    void movingLeaderClearsOldSeatAndSetsNewSeatOnlyWhenStillLeader(String newRole) throws Exception {
+    void movingLeaderIsRejectedAndBothTeamsRemainUnchanged(String newRole) throws Exception {
         sql("UPDATE member SET authority='LEADER' WHERE id=941");
         sql("UPDATE team SET leader_member_id=941 WHERE id=911");
         mvc.perform(patch("/api/members/941").with(authentication(auth("OWNER",false)))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"role\":\""+newRole+"\",\"jobPositionId\":921,\"teamId\":912}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.errorCode").value("AU-051"));
+        em.flush(); em.clear();
+        assertThat(((Number) em.createNativeQuery("SELECT leader_member_id FROM team WHERE id=911")
+                .getSingleResult()).longValue()).isEqualTo(941L);
+        assertThat(em.createNativeQuery("SELECT leader_member_id FROM team WHERE id=912").getSingleResult()).isNull();
+        assertThat(getDetail.getDetail(901L,941L).teamId()).isEqualTo(911L);
+        assertThat(getDetail.getDetail(901L,941L).roleId()).isEqualTo(931L);
+        verifyNoInteractions(refreshTokenStore);
+    }
+
+    @ParameterizedTest
+    @CsvSource({"MEMBER", "LEADER"})
+    void leaderCanStayLeaderAndMemberCanFillVacancy(String currentRole) throws Exception {
+        if (currentRole.equals("LEADER")) {
+            sql("UPDATE member SET authority='LEADER' WHERE id=941");
+            sql("UPDATE team SET leader_member_id=941 WHERE id=911");
+        }
+        sql("INSERT INTO position (id,company_id,name,authority) VALUES (922,901,'Lead','LEADER')");
+        mvc.perform(patch("/api/members/941").with(authentication(auth("OWNER",false)))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"role\":\"LEADER\",\"jobPositionId\":922,\"roleId\":931}"))
                 .andExpect(status().isOk());
         em.flush(); em.clear();
-        assertThat(em.createNativeQuery("SELECT leader_member_id FROM team WHERE id=911").getSingleResult()).isNull();
-        Object newLeader = em.createNativeQuery("SELECT leader_member_id FROM team WHERE id=912").getSingleResult();
-        if (newRole.equals("LEADER")) {
-            assertThat(((Number)newLeader).longValue()).isEqualTo(941L);
-        } else {
-            assertThat(newLeader).isNull();
-        }
-        assertThat(getDetail.getDetail(901L,941L).roleId()).isEqualTo(2L);
+        assertThat(((Number)em.createNativeQuery("SELECT leader_member_id FROM team WHERE id=911")
+                .getSingleResult()).longValue()).isEqualTo(941L);
+        var member = getDetail.getDetail(901L,941L);
+        assertThat(member.role().name()).isEqualTo("LEADER");
+        assertThat(member.jobPositionId()).isEqualTo(922L);
+        verify(refreshTokenStore).revokeAllByMember(941L);
+    }
+
+    @Test
+    void cannotDemoteLeaderWithinSameTeam() throws Exception {
+        sql("UPDATE member SET authority='LEADER' WHERE id=941");
+        sql("UPDATE team SET leader_member_id=941 WHERE id=911");
+        mvc.perform(patch("/api/members/941").with(authentication(auth("OWNER",false)))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"role\":\"MEMBER\",\"jobPositionId\":921}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.errorCode").value("AU-051"));
+        em.flush(); em.clear();
+        assertThat(getDetail.getDetail(901L,941L).role().name()).isEqualTo("LEADER");
+        assertThat(((Number)em.createNativeQuery("SELECT leader_member_id FROM team WHERE id=911")
+                .getSingleResult()).longValue()).isEqualTo(941L);
+        verifyNoInteractions(refreshTokenStore);
+    }
+
+    @Test
+    void cannotMoveMemberIntoOccupiedLeaderSeat() throws Exception {
+        sql("""
+                INSERT INTO member (id,company_id,team_id,position_id,role_id,email,password_hash,name,authority,is_admin,status)
+                VALUES (942,901,912,921,932,'leader@example.test','hash','Leader','LEADER',FALSE,'ACTIVE')
+                """);
+        sql("UPDATE team SET leader_member_id=942 WHERE id=912");
+        mvc.perform(patch("/api/members/941").with(authentication(auth("OWNER",false)))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"role\":\"LEADER\",\"jobPositionId\":921,\"teamId\":912,\"roleId\":932}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.errorCode").value("AU-029"));
+        em.flush(); em.clear();
+        assertThat(getDetail.getDetail(901L,941L).teamId()).isEqualTo(911L);
+        assertThat(getDetail.getDetail(901L,941L).roleId()).isEqualTo(931L);
+        assertThat(getDetail.getDetail(901L,941L).role().name()).isEqualTo("MEMBER");
+        assertThat(getDetail.getDetail(901L,942L).role().name()).isEqualTo("LEADER");
+        assertThat(((Number)em.createNativeQuery("SELECT leader_member_id FROM team WHERE id=912")
+                .getSingleResult()).longValue()).isEqualTo(942L);
+        verifyNoInteractions(refreshTokenStore);
     }
 
     private TestingAuthenticationToken auth(String role, boolean admin) {

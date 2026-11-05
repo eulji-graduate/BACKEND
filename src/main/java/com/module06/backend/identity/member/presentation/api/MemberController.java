@@ -13,6 +13,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -164,6 +165,8 @@ public class MemberController {
         return ApiResponse.success("구성원 상세를 조회했습니다", MemberDetailResponse.from(detail));
     }
 
+    @Operation(summary = "구성원 정보 수정", description = "Owner 또는 관리자 겸직자 전용. "
+            + "다른 팀장이 있는 팀으로의 팀장 지정은 AU-029, 팀장 강등·이동으로 발생하는 공석은 AU-051(409)로 거절합니다.")
     @PatchMapping("/{memberId}")
     @PreAuthorize("hasAnyRole('OWNER','ADMIN')")
     public ApiResponse<MemberDetailResponse> updateRole(
