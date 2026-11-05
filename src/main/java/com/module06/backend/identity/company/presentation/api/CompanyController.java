@@ -84,9 +84,9 @@ public class CompanyController {
         return ApiResponse.success("온보딩을 완료했습니다", response);
     }
 
-    @Operation(summary = "기업 기본 정보 조회", description = "기업 설정 > 기본 정보 탭.")
+    @Operation(summary = "기업 기본 정보 조회", description = "Owner 또는 관리자 겸직자가 본인 회사의 기본 정보를 조회합니다.")
     @GetMapping("/me")
-    @PreAuthorize("hasRole('OWNER')")
+    @PreAuthorize("hasRole('OWNER') or principal.isAdmin()")
     public ApiResponse<CompanyProfileResponse> getProfile(
             @Parameter(hidden = true)
             @AuthenticationPrincipal(expression = "companyId") Long companyId) {
