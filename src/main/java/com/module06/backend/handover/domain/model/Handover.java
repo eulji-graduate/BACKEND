@@ -164,11 +164,10 @@ public class Handover {
     }
 
     public void finalizeApproval(Long approverId, String approverNameSnap, LocalDateTime at,
-                                 boolean allowDirectOffboardingFinalize) {
-        boolean directOffboardingFinalizeAllowed = allowDirectOffboardingFinalize
-                && status == HandoverStatus.SUBMITTED
-                && handoverType == HandoverType.OFFBOARDING;
-        if (status != HandoverStatus.REASSIGNED && !directOffboardingFinalizeAllowed) {
+                                 boolean allowDirectLeaderFinalize) {
+        boolean directLeaderFinalizeAllowed = allowDirectLeaderFinalize
+                && status == HandoverStatus.SUBMITTED;
+        if (status != HandoverStatus.REASSIGNED && !directLeaderFinalizeAllowed) {
             throw new BusinessException(HandoverErrorCode.HO_FINALIZE_NOT_ALLOWED);
         }
         requireId(approverId, "approverId");
@@ -188,6 +187,9 @@ public class Handover {
             throw new BusinessException(HandoverErrorCode.HO_REJECT_NOT_ALLOWED);
         }
         requireText(reason, "reason");
+        if (reason.length() > 200) {
+            throw new BusinessException(HandoverErrorCode.HO_REJECT_REASON_TOO_LONG);
+        }
         status = HandoverStatus.REJECTED;
         rejectReason = reason;
     }

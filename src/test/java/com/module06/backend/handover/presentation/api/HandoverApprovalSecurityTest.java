@@ -141,6 +141,63 @@ class HandoverApprovalSecurityTest {
         verifyNoInteractions(memberStatus);
     }
 
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void submittedVacationRequiresWriterToBeTeamLeader(boolean writerIsLeader) throws Exception {
+        Handover handover = stubHandover(false);
+        when(organization.findMemberIdsByCompany(COMPANY)).thenReturn(List.of(WRITER));
+        when(organization.findMember(LEADER)).thenReturn(new OrgQueryPort.MemberSnapshot(LEADER,"Owner","대표"));
+        when(organization.findTeamLeaderId(TEAM)).thenReturn(writerIsLeader ? WRITER : LEADER);
+        if (writerIsLeader) {
+            when(repository.save(any())).thenAnswer(call -> call.getArgument(0));
+        }
+        var response = mockMvc.perform(patch("/api/handovers/1000/finalize")
+                .header("Authorization", bearer("OWNER",false)));
+        if (writerIsLeader) {
+            response.andExpect(status().isOk());
+            assertThat(handover.getStatus()).isEqualTo(HandoverStatus.FINALIZED);
+            assertThat(handover.isPendingAttribution()).isFalse();
+            verify(memberStatus).toVacation(WRITER);
+            verify(memberStatus, never()).offboard(any());
+        } else {
+            response.andExpect(status().isConflict()).andExpect(jsonPath("$.errorCode").value("HO-018"));
+            assertThat(handover.getStatus()).isEqualTo(HandoverStatus.SUBMITTED);
+            verifyNoInteractions(memberStatus);
+            verify(repository, never()).save(any());
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"{}", "{\"reason\":null}", "{\"reason\":\"\"}", "{\"reason\":\"   \"}"})
+    void invalidRejectReasonDoesNotReachApplication(String body) throws Exception {
+        mockMvc.perform(patch("/api/handovers/1000/reject").header("Authorization",bearer("OWNER",false))
+                        .contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isBadRequest());
+        verifyNoInteractions(repository, memberStatus);
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {200, 201})
+    void rejectReasonLengthBoundary(int length) throws Exception {
+        Handover handover = null;
+        if (length == 200) {
+            handover = stubHandover(true);
+            when(organization.findMemberIdsByCompany(COMPANY)).thenReturn(List.of(WRITER));
+            when(repository.save(any())).thenAnswer(call -> call.getArgument(0));
+        }
+        var response = mockMvc.perform(patch("/api/handovers/1000/reject")
+                .header("Authorization",bearer("OWNER",false)).contentType(MediaType.APPLICATION_JSON)
+                .content("{\"reason\":\"" + "가".repeat(length) + "\"}"));
+        if (length == 200) {
+            response.andExpect(status().isOk());
+            assertThat(handover.getRejectReason()).hasSize(200);
+            verify(memberStatus).restoreActive(WRITER);
+        } else {
+            response.andExpect(status().isBadRequest());
+            verifyNoInteractions(repository, memberStatus);
+        }
+    }
+
     private String bearer(String role, boolean admin) {
         return "Bearer " + tokens.createAccessToken(new AuthPrincipal(LEADER, COMPANY, role, admin, TEAM));
     }

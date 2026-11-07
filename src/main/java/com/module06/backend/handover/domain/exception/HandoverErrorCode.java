@@ -45,7 +45,8 @@ public enum HandoverErrorCode implements ErrorCode {
 
     HO_ATTRIBUTE_NOT_ALLOWED(HttpStatus.CONFLICT, "HO-027", "귀속 대기 상태가 아니라 신규 팀장 일괄 이관을 할 수 없습니다."),
     HO_ATTRIBUTE_COMMAND_INVALID(HttpStatus.BAD_REQUEST, "HO-028", "신규 팀장 이관 요청이 올바르지 않습니다."),
-    HO_ATTRIBUTE_TO_WRITER_NOT_ALLOWED(HttpStatus.CONFLICT, "HO-029", "퇴사자 본인을 신규 팀장으로 지정할 수 없습니다.");
+    HO_ATTRIBUTE_TO_WRITER_NOT_ALLOWED(HttpStatus.CONFLICT, "HO-029", "퇴사자 본인을 신규 팀장으로 지정할 수 없습니다."),
+    HO_REJECT_REASON_TOO_LONG(HttpStatus.BAD_REQUEST, "HO-030", "반려 사유는 최대 200자까지 입력할 수 있습니다.");
 
     private final HttpStatus httpStatus;
     private final String code;

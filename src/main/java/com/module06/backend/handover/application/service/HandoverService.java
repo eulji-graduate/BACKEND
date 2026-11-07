@@ -128,7 +128,7 @@ public class HandoverService implements CreateHandoverUseCase, ReassignHandoverI
         assertOwnerApprover(handover, approverPrincipal);
         OrgQueryPort.MemberSnapshot approver = orgQueryPort().findMember(approverPrincipal.memberId());
         handover.finalizeApproval(approverPrincipal.memberId(), approver.name(), finalizedAt,
-                isLeaderOffboarding(handover));
+                isSubmittedByTeamLeader(handover));
         if (handover.getHandoverType() == HandoverType.VACATION) {
             memberStatusPort().toVacation(handover.getWriterMemberId());
         } else {
@@ -180,12 +180,9 @@ public class HandoverService implements CreateHandoverUseCase, ReassignHandoverI
         return handoverRepository.save(handover);
     }
 
-    private boolean isLeaderOffboarding(Handover handover) {
-        if (handover.getHandoverType() != HandoverType.OFFBOARDING
-                || handover.getStatus() != HandoverStatus.SUBMITTED) {
-            // REASSIGNED 오프보딩(complete 거친 일반 사원 경로)은 직행과 무관하다.
-            // 여기서 org 조회를 타면 기존에 조직 조회 없이 되던 finalize가 OrgQueryPort
-            // 부재·조회 실패에 새로 묶인다 — SUBMITTED에서만 팀장 판정한다.
+    private boolean isSubmittedByTeamLeader(Handover handover) {
+        if (handover.getStatus() != HandoverStatus.SUBMITTED) {
+            // 중간 승인된 경로에서는 추가 조직 조회 없이 기존 최종 승인 흐름을 유지한다.
             return false;
         }
         Long teamLeaderId = orgQueryPort().findTeamLeaderId(handover.getTeamId());
