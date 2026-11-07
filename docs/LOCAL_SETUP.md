@@ -268,3 +268,24 @@ curl http://localhost:8080/actuator/health     # {"status":"UP"}
 | [../review-loop/SETUP.md](../review-loop/SETUP.md) | AI 코드 리뷰 루프 세팅(push 게이트) |
 | `compose.yml` | 로컬 Redis |
 | `infra/docker-compose.yml` · `infra/deploy.sh` | 운영 배포(SSM에서 비밀값 주입) |
+
+
+## 프로젝트 저장소 삭제
+
+`DELETE /api/companies/me/storage/projects/{tag}`는 Owner 또는 관리자 겸직 계정이 호출한다.
+DONE 프로젝트만 허용하며 녹음·업로드·STT·분석 처리 중인 회의가 있으면 `409 MT-011`로 거절한다.
+
+- 삭제: 녹음본, 잔여 청크, STT 블록 오디오, 자막, 전사문, 요약·요약 항목, 분석 중간 산출물 및 관련 처리 기록.
+- 유지: 프로젝트, 회의 기본 정보·참석자, 액션, 분배 이력, 감사·학습 기록, 토큰 사용 이력.
+- 삭제한 전사문·요약 항목을 가리키던 액션·분배 이력의 참조는 비운다. 액션 본문은 유지한다.
+- 파일 삭제가 모두 성공한 뒤 DB 콘텐츠와 사용량을 정리한다. 일부 파일만 삭제된 채 실패하면 DB와 키·사용량은 유지하며 재시도 시 이미 없는 파일은 통과한다.
+- 파일과 DB는 하나의 원자적 트랜잭션이 아니다. 파일 삭제 후 DB 실패 시에도 DB의 키가 남으므로 같은 요청으로 재시도한다.
+
+로컬 삭제 어댑터의 파일 루트 기본값은 백엔드 실행 디렉터리의 `.local/storage`이며,
+`app.local-storage.root` 설정으로 변경할 수 있다. 저장 키를 이 루트 아래 상대 경로로 해석한다.
+회사·회의 접두가 일치하는 `recordings/org-{companyId}/meeting-{meetingId}/...`와
+`stt-temp/org-{companyId}/meeting-{meetingId}/...`만 허용한다. 외부 URL, 경로 이탈, 심볼릭 링크는 거절한다.
+
+이 작업은 파일 **삭제**를 연결한다. 기존 로컬 업로드·재생 URL 발급은 스텁이므로 실제 녹음 시연을 위해서는
+후속 로컬 저장 구현이 같은 파일 루트와 저장 키 규칙을 사용해야 한다. 시드의 저장 용량은 합성 집계이며 실제 GB 단위 파일을 생성하지 않는다.
+FRONTEND 구독 화면은 더미이므로 삭제 후 사용량 변화는 저장소 화면에만 반영된다.
