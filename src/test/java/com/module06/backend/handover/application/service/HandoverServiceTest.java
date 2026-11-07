@@ -276,6 +276,45 @@ class HandoverServiceTest {
     }
 
     @Test
+    void finalizeLeaderVacationDirectlyWithoutOffboardingOrActionReassignment() {
+        Handover handover = submittedWithOneItem();
+        when(handoverRepository.findById(HANDOVER_ID)).thenReturn(Optional.of(handover));
+        when(orgQueryPort.findMemberIdsByCompany(COMPANY)).thenReturn(List.of(WRITER));
+        when(orgQueryPort.findMember(LEADER)).thenReturn(new OrgQueryPort.MemberSnapshot(LEADER, "Owner", "Owner"));
+        when(orgQueryPort.findTeamLeaderId(TEAM)).thenReturn(WRITER);
+
+        Handover saved = handoverService.finalize(HANDOVER_ID, ownerPrincipal(), NOW);
+
+        assertThat(saved.getStatus()).isEqualTo(HandoverStatus.FINALIZED);
+        assertThat(saved.getFinalApproverId()).isEqualTo(LEADER);
+        assertThat(saved.getFinalApproverNameSnap()).isEqualTo("Owner");
+        verify(memberStatusPort).toVacation(WRITER);
+        verify(memberStatusPort, never()).offboard(WRITER);
+        verifyNoInteractions(finalizeHandoverInsightsUseCase);
+        verify(actionReassignPort, never()).reassign(any(), any(), any());
+    }
+
+    @Test
+    void finalizeRegularVacationStillRequiresIntermediateApproval() {
+        Handover handover = Handover.createVacation(WRITER, TEAM, "Writer", "Member",
+                NOW.plusDays(1), NOW.plusDays(7), List.of());
+        when(handoverRepository.findById(HANDOVER_ID)).thenReturn(Optional.of(handover));
+        when(orgQueryPort.findMemberIdsByCompany(COMPANY)).thenReturn(List.of(WRITER));
+        when(orgQueryPort.findMember(LEADER)).thenReturn(new OrgQueryPort.MemberSnapshot(LEADER, "Owner", "Owner"));
+        when(orgQueryPort.findTeamLeaderId(TEAM)).thenReturn(LEADER);
+
+        assertThatThrownBy(() -> handoverService.finalize(HANDOVER_ID, ownerPrincipal(), NOW))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        exception -> assertThat(exception.getErrorCode())
+                                .isEqualTo(HandoverErrorCode.HO_FINALIZE_NOT_ALLOWED));
+
+        assertThat(handover.getStatus()).isEqualTo(HandoverStatus.SUBMITTED);
+        verifyNoInteractions(memberStatusPort);
+        verifyNoInteractions(finalizeHandoverInsightsUseCase);
+        verify(handoverRepository, never()).save(any(Handover.class));
+    }
+
+    @Test
     void finalizeLeaderOffboardingDirectlyFromSubmittedOffboardsWriterAndFinalizesInsights() {
         Handover handover = submittedOffboardingWithOneItem();
         when(handoverRepository.findById(HANDOVER_ID)).thenReturn(Optional.of(handover));
@@ -424,6 +463,21 @@ class HandoverServiceTest {
                                 .isEqualTo(HandoverErrorCode.HO_ATTRIBUTE_COMMAND_INVALID));
 
         verify(handoverRepository, never()).findById(any());
+    }
+
+    @Test
+    void rejectTooLongReasonDoesNotRollbackActionsOrChangeMemberStatus() {
+        Handover handover = reassigned(HandoverType.VACATION);
+        when(handoverRepository.findById(HANDOVER_ID)).thenReturn(Optional.of(handover));
+        when(orgQueryPort.findMemberIdsByCompany(COMPANY)).thenReturn(List.of(WRITER));
+        assertThatThrownBy(() -> handoverService.reject(new RejectHandoverCommand(
+                HANDOVER_ID, "가".repeat(201), ownerPrincipal())))
+                .isInstanceOfSatisfying(BusinessException.class, error ->
+                        assertThat(error.getErrorCode()).isEqualTo(HandoverErrorCode.HO_REJECT_REASON_TOO_LONG));
+        assertThat(handover.getStatus()).isEqualTo(HandoverStatus.REASSIGNED);
+        assertThat(handover.getRejectReason()).isNull();
+        verifyNoInteractions(actionReassignPort, memberStatusPort);
+        verify(handoverRepository, never()).save(any());
     }
 
     @Test

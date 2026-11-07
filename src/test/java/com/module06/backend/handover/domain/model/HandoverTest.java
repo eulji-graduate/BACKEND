@@ -131,12 +131,26 @@ class HandoverTest {
     }
 
     @Test
-    void finalizeDoesNotAllowDirectSubmittedVacationEvenWhenFlagged() {
+    void finalizeAllowsDirectSubmittedVacationWhenFlagged() {
         Handover handover = Handover.createVacation(WRITER, TEAM, "Kim", "Manager", START, END, List.of());
 
-        assertThatThrownBy(() -> handover.finalizeApproval(9L, "Owner", NOW, true))
-                .isInstanceOf(BusinessException.class);
+        handover.finalizeApproval(9L, "Owner", NOW, true);
+        assertThat(handover.getStatus()).isEqualTo(HandoverStatus.FINALIZED);
+        assertThat(handover.isPendingAttribution()).isFalse();
+    }
+
+    @Test
+    void rejectEnforcesReasonLengthBeforeChangingState() {
+        Handover handover = Handover.createVacation(WRITER, TEAM, "Kim", "Manager", START, END, List.of());
+        assertThatThrownBy(() -> handover.reject("가".repeat(201)))
+                .isInstanceOfSatisfying(BusinessException.class, error ->
+                        assertThat(error.getErrorCode()).isEqualTo(
+                                com.module06.backend.handover.domain.exception.HandoverErrorCode.HO_REJECT_REASON_TOO_LONG));
         assertThat(handover.getStatus()).isEqualTo(HandoverStatus.SUBMITTED);
+        assertThat(handover.getRejectReason()).isNull();
+        handover.reject("가".repeat(200));
+        assertThat(handover.getStatus()).isEqualTo(HandoverStatus.REJECTED);
+        assertThat(handover.getRejectReason()).hasSize(200);
     }
 
     @Test
