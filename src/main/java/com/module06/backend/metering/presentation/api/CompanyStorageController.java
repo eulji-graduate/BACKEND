@@ -46,7 +46,7 @@ public class CompanyStorageController {
 
     @Operation(
             summary = "프로젝트별 저장 기록 삭제",
-            description = "완료(DONE)된 프로젝트의 음성, 자막, 요약 저장 기록을 삭제합니다. Owner/Admin만 가능합니다."
+            description = "완료(DONE)된 프로젝트의 녹음 파일·청크·STT 오디오와 자막·전사문·요약을 삭제하고 사용량을 초기화합니다. 프로젝트·회의·액션·분배 및 감사 이력은 유지합니다. 처리 중에는 409로 거절합니다. Owner/Admin만 가능합니다."
     )
     @PreAuthorize("hasAnyRole('OWNER', 'ADMIN')")
     @DeleteMapping("/storage/projects/{tag}")

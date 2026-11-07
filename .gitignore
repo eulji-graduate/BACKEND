@@ -78,3 +78,6 @@ src/main/resources/application-dev.yaml
 
 # k6 load test files
 /k6/
+
+# Local recording objects
+.local/storage/

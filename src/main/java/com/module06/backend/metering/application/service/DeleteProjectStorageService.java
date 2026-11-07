@@ -1,6 +1,7 @@
 package com.module06.backend.metering.application.service;
 
 import com.module06.backend.global.exception.BusinessException;
+import com.module06.backend.metering.application.port.out.ProjectStorageContentPort;
 import com.module06.backend.metering.application.usecase.DeleteProjectStorageUseCase;
 import com.module06.backend.metering.domain.exception.MeteringErrorCode;
 import com.module06.backend.metering.domain.repository.MeetingStorageUsageRepository;
@@ -14,13 +15,16 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class DeleteProjectStorageService implements DeleteProjectStorageUseCase {
 
+    private final ProjectStorageContentPort contentPort;
     private final ProjectRepository projectRepository;
     private final MeetingStorageUsageRepository meetingStorageUsageRepository;
     private final MeetingTextStorageUsageRepository meetingTextStorageUsageRepository;
 
     public DeleteProjectStorageService(ProjectRepository projectRepository,
                                        MeetingStorageUsageRepository meetingStorageUsageRepository,
-                                       MeetingTextStorageUsageRepository meetingTextStorageUsageRepository) {
+                                       MeetingTextStorageUsageRepository meetingTextStorageUsageRepository,
+                                       ProjectStorageContentPort contentPort) {
+        this.contentPort = contentPort;
         this.projectRepository = projectRepository;
         this.meetingStorageUsageRepository = meetingStorageUsageRepository;
         this.meetingTextStorageUsageRepository = meetingTextStorageUsageRepository;
@@ -35,6 +39,7 @@ public class DeleteProjectStorageService implements DeleteProjectStorageUseCase 
             throw new BusinessException(MeteringErrorCode.MT_STORAGE_PROJECT_NOT_DONE);
         }
 
+        contentPort.deleteContents(companyId, project.getId());
         meetingStorageUsageRepository.clearByCompanyIdAndProjectId(companyId, project.getId());
         meetingTextStorageUsageRepository.clearByCompanyIdAndProjectId(companyId, project.getId());
     }
