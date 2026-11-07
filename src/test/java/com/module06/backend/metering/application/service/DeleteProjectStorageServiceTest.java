@@ -20,6 +20,9 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.inOrder;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -39,12 +42,15 @@ class DeleteProjectStorageServiceTest {
     @Mock
     private MeetingTextStorageUsageRepository meetingTextStorageUsageRepository;
 
+    @Mock
+    private com.module06.backend.metering.application.port.out.ProjectStorageContentPort contentPort;
+
     private DeleteProjectStorageService service;
 
     @BeforeEach
     void setUp() {
         service = new DeleteProjectStorageService(projectRepository, meetingStorageUsageRepository,
-                meetingTextStorageUsageRepository);
+                meetingTextStorageUsageRepository, contentPort);
     }
 
     @Test
@@ -79,8 +85,22 @@ class DeleteProjectStorageServiceTest {
 
         service.deleteByTag(COMPANY, TAG);
 
+        var order = inOrder(contentPort, meetingStorageUsageRepository, meetingTextStorageUsageRepository);
+        order.verify(contentPort).deleteContents(COMPANY, PROJECT);
+        order.verify(meetingStorageUsageRepository).clearByCompanyIdAndProjectId(COMPANY, PROJECT);
+        order.verify(meetingTextStorageUsageRepository).clearByCompanyIdAndProjectId(COMPANY, PROJECT);
         verify(meetingStorageUsageRepository).clearByCompanyIdAndProjectId(COMPANY, PROJECT);
         verify(meetingTextStorageUsageRepository).clearByCompanyIdAndProjectId(COMPANY, PROJECT);
+    }
+
+    @Test
+    void contentDeletionFailureNeverClearsLedgers() {
+        when(projectRepository.findByCompanyIdAndTag(COMPANY, TAG))
+                .thenReturn(Optional.of(project(ProjectStatus.DONE)));
+        doThrow(new BusinessException(MeteringErrorCode.MT_STORAGE_DELETE_FAILED))
+                .when(contentPort).deleteContents(COMPANY, PROJECT);
+        assertThatThrownBy(() -> service.deleteByTag(COMPANY, TAG)).isInstanceOf(BusinessException.class);
+        verifyNoInteractions(meetingStorageUsageRepository, meetingTextStorageUsageRepository);
     }
 
     private Project project(ProjectStatus status) {

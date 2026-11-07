@@ -5,6 +5,8 @@ import com.module06.backend.metering.application.result.StorageOverviewResult;
 import com.module06.backend.metering.application.usecase.GetStorageOverviewUseCase;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
@@ -24,6 +26,8 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.authentication;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
+import static org.mockito.Mockito.verify;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -48,6 +52,35 @@ class CompanyStorageSecurityTest {
 
     @MockitoBean
     private GetStorageOverviewUseCase getStorageOverviewUseCase;
+
+    @MockitoBean
+    private com.module06.backend.metering.application.usecase.DeleteProjectStorageUseCase deleteStorage;
+
+    @ParameterizedTest
+    @CsvSource({"OWNER,false", "MEMBER,true", "LEADER,true"})
+    void ownerAndAdminCanDeleteOnlyAuthenticatedCompanyStorage(String role, boolean admin) throws Exception {
+        mockMvc.perform(delete("/api/companies/me/storage/projects/done-project")
+                        .param("companyId","999")
+                        .with(authentication(authenticationOf(role,admin))))
+                .andExpect(status().isOk());
+        verify(deleteStorage).deleteByTag(10L,"done-project");
+    }
+
+    @ParameterizedTest
+    @CsvSource({"MEMBER", "LEADER"})
+    void ordinaryMemberCannotDeleteStorage(String role) throws Exception {
+        mockMvc.perform(delete("/api/companies/me/storage/projects/done-project")
+                        .with(authentication(authenticationOf(role))))
+                .andExpect(status().isForbidden());
+        verifyNoInteractions(deleteStorage);
+    }
+
+    @Test
+    void anonymousCannotDeleteStorage() throws Exception {
+        mockMvc.perform(delete("/api/companies/me/storage/projects/done-project"))
+                .andExpect(status().isUnauthorized());
+        verifyNoInteractions(deleteStorage);
+    }
 
     @Test
     @DisplayName("익명 요청은 401(AU-006)로 거절한다")
