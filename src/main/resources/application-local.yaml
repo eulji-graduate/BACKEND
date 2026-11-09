@@ -33,6 +33,10 @@ server:
   forward-headers-strategy: none
 
 app:
+  local-storage:
+    root: ${LOCAL_STORAGE_ROOT:.local/storage}
+    base-url: ${LOCAL_STORAGE_BASE_URL:http://localhost:${server.port:8080}}
+    max-upload-bytes: ${LOCAL_STORAGE_MAX_UPLOAD_BYTES:5368709120}
   cors:
     allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:3000,http://127.0.0.1:3000}
 

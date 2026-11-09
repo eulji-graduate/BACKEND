@@ -2,8 +2,8 @@ package com.module06.backend.cap.application.port.out;
 
 /* comment.
     CAP과 storage 사이의 경계 — 청크 업로드용 presigned PUT URL 발급만 다룬다.
-    project의 ProjectAttachmentStoragePort와 동일 패턴. 구현체는 두 개 — 로컬/테스트는
-    CapObjectStorageStubAdapter(@Profile("!prod")), 운영은 CapS3ObjectStorageAdapter(@Profile("prod")).
+    project의 ProjectAttachmentStoragePort와 동일 패턴. local은 LocalCapObjectStorageAdapter, prod는 CapS3ObjectStorageAdapter가 실제 저장소를 사용한다.
+    그 외 기본/테스트 프로파일은 CapObjectStorageStubAdapter를 사용한다.
 */
 public interface CapObjectStoragePort {
 

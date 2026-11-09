@@ -182,6 +182,30 @@ class ProjectStorageDeletionIntegrationTest {
         assertIntact();
     }
 
+    @Test
+    void deletesOnlinePendingRecordingKeyUsedByCompletedProject() throws Exception {
+        String key = "recordings/org-1/member-2/online-pending/test/회의 녹음.wav";
+        jdbc.update("UPDATE recording SET file_url=? WHERE meeting_id=140", key);
+        Path file = root.resolve(key);
+        Files.createDirectories(file.getParent());
+        Files.writeString(file,"data");
+        deleteStorage.deleteByTag(1L,"hr-process");
+        assertThat(file).doesNotExist();
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM recording WHERE meeting_id=140",Integer.class)).isZero();
+    }
+
+    @Test
+    void sharedOnlinePendingKeyInAnotherProjectPreventsDeletion() {
+        String key = "recordings/org-1/member-2/online-pending/test/audio.wav";
+        jdbc.update("UPDATE recording SET file_url=? WHERE meeting_id=140", key);
+        jdbc.update("INSERT INTO recording (meeting_id,file_name,file_url,file_size) VALUES (150,'audio',?,4)",key);
+        assertThatThrownBy(() -> deleteStorage.deleteByTag(1L,"hr-process"))
+                .isInstanceOfSatisfying(BusinessException.class,e ->
+                        assertThat(e.getErrorCode()).isEqualTo(MeteringErrorCode.MT_STORAGE_OBJECT_INVALID));
+        verifyNoInteractions(objects);
+        assertIntact();
+    }
+
     private void assertIntact() {
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM recording WHERE meeting_id=140",Integer.class)).isEqualTo(1);
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM transcript_chunk WHERE meeting_id=140",Integer.class)).isEqualTo(1);

@@ -38,7 +38,12 @@ public enum CapErrorCode implements ErrorCode {
     CAP_CAPTURE_PAUSED(HttpStatus.CONFLICT, "CAP-020", "회의가 일시정지 상태입니다."),
     CAP_CAPTURE_SESSION_NOT_ACTIVE(HttpStatus.CONFLICT, "CAP-022", "캡처 세션이 활성 상태가 아닙니다."),
 
-    CAP_RMS_REQUIRED(HttpStatus.UNPROCESSABLE_ENTITY, "CAP-018", "rms 값이 필요합니다.");
+    CAP_RMS_REQUIRED(HttpStatus.UNPROCESSABLE_ENTITY, "CAP-018", "rms 값이 필요합니다."),
+    CAP_LOCAL_SIGNATURE_INVALID(HttpStatus.FORBIDDEN, "CAP-026", "파일 URL의 서명이 유효하지 않거나 만료되었습니다."),
+    CAP_LOCAL_OBJECT_EXISTS(HttpStatus.CONFLICT, "CAP-027", "이미 업로드된 파일은 덮어쓸 수 없습니다."),
+    CAP_LOCAL_STORAGE_FAILED(HttpStatus.SERVICE_UNAVAILABLE, "CAP-028", "로컬 파일 처리에 실패했습니다."),
+    CAP_LOCAL_PATH_INVALID(HttpStatus.BAD_REQUEST, "CAP-029", "로컬 파일 경로가 올바르지 않습니다."),
+    CAP_LOCAL_LENGTH_MISMATCH(HttpStatus.BAD_REQUEST, "CAP-030", "전송한 파일 크기가 요청과 일치하지 않습니다.");
 
     private final HttpStatus httpStatus;
     private final String code;

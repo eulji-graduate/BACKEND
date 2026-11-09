@@ -70,8 +70,16 @@ public class ProjectStorageContentAdapter implements ProjectStorageContentPort {
         for (String key : jdbc.queryForList(query, String.class, meetingId)) {
             if (key == null) continue;
             String scope = "org-" + companyId + "/meeting-" + meetingId + "/";
-            if (!(key.startsWith("recordings/" + scope) || key.startsWith("stt-temp/" + scope))
+            boolean onlinePending = key.matches("recordings/org-" + companyId + "/member-[1-9][0-9]*/online-pending/.+");
+            if (!(key.startsWith("recordings/" + scope) || key.startsWith("stt-temp/" + scope) || onlinePending)
                     || key.contains("..") || key.contains("\\") || key.contains(":")) {
+                throw new BusinessException(MeteringErrorCode.MT_STORAGE_OBJECT_INVALID);
+            }
+            if (onlinePending && !jdbc.queryForList(
+                    "SELECT 1 FROM recording r JOIN meeting m ON m.id = r.meeting_id "
+                    + "WHERE r.file_url = ? AND (m.company_id <> ? OR m.project_id <> "
+                    + "(SELECT project_id FROM meeting WHERE id = ?))",
+                    Integer.class, key, companyId, meetingId).isEmpty()) {
                 throw new BusinessException(MeteringErrorCode.MT_STORAGE_OBJECT_INVALID);
             }
             keys.add(key);
