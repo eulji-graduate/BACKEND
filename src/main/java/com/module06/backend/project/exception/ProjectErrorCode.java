@@ -36,7 +36,13 @@ public enum ProjectErrorCode implements ErrorCode {
     // 저장하면, 다른 프로젝트·다른 도메인(cap의 recordings/...)의 키를 자기 첨부로 "확정"한 뒤
     // 삭제 API로 그 실제 S3 객체를 지울 수 있다. ManualRecordingService의 s3Key 접두 검증과
     // 동일 취지.
-    ATTACHMENT_KEY_MISMATCH(HttpStatus.BAD_REQUEST, "PJ-007", "첨부파일 업로드 경로가 올바르지 않습니다.");
+    ATTACHMENT_KEY_MISMATCH(HttpStatus.BAD_REQUEST, "PJ-007", "첨부파일 업로드 경로가 올바르지 않습니다."),
+    ATTACHMENT_SIGNATURE_INVALID(HttpStatus.FORBIDDEN, "PJ-008", "첨부파일 접근 서명이 없거나 유효하지 않습니다."),
+    ATTACHMENT_SIZE_INVALID(HttpStatus.PAYLOAD_TOO_LARGE, "PJ-009", "첨부파일 크기가 허용 범위를 벗어났습니다."),
+    ATTACHMENT_LENGTH_MISMATCH(HttpStatus.BAD_REQUEST, "PJ-010", "첨부파일의 실제 크기가 요청과 다릅니다."),
+    ATTACHMENT_OBJECT_EXISTS(HttpStatus.CONFLICT, "PJ-011", "이미 업로드된 첨부파일입니다."),
+    ATTACHMENT_UPLOAD_INCOMPLETE(HttpStatus.BAD_REQUEST, "PJ-012", "첨부파일 업로드가 완료되지 않았거나 크기가 다릅니다."),
+    ATTACHMENT_STORAGE_FAILED(HttpStatus.INTERNAL_SERVER_ERROR, "PJ-013", "첨부파일 저장소 처리에 실패했습니다.");
 
     private final HttpStatus httpStatus;
     private final String code;

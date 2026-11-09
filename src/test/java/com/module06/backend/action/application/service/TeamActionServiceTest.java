@@ -330,7 +330,7 @@ class TeamActionServiceTest {
         when(actionRepository.findById(10L)).thenReturn(Optional.of(action));
         when(actionReferenceRepository.findProjectAttachmentById(1L, PROJECT))
                 .thenReturn(Optional.of(new AttachmentReference(1L, "기획서.pdf", "https://s3/x", 1024L, LocalDateTime.now())));
-        when(projectAttachmentStoragePort.issueDownloadUrl("https://s3/x"))
+        when(projectAttachmentStoragePort.issueDownloadUrl("https://s3/x", "기획서.pdf"))
                 .thenReturn(new IssuedDownloadUrl("https://s3/get", 300));
 
         IssuedDownloadUrl result = service.issueAttachmentDownloadUrl(COMPANY, 10L, 1L);

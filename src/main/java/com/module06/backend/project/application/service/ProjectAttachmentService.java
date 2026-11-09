@@ -88,6 +88,8 @@ public class ProjectAttachmentService implements
         requireProjectInCompany(command.companyId(), command.projectId());
         requireOwnAttachmentKey(command.companyId(), command.projectId(), command.fileUrl());
 
+        projectAttachmentStoragePort.verifyUploaded(command.fileUrl(), command.fileSize());
+
         return projectAttachmentRepository.findByProjectIdAndFileUrl(command.projectId(), command.fileUrl())
                 .orElseGet(() -> {
                     ProjectAttachment attachment = ProjectAttachment.create(
@@ -149,7 +151,7 @@ public class ProjectAttachmentService implements
         requireProjectInCompany(command.companyId(), command.projectId());
         ProjectAttachment attachment = requireAttachmentInProject(command.projectId(), command.attachmentId());
 
-        return projectAttachmentStoragePort.issueDownloadUrl(attachment.getFileUrl());
+        return projectAttachmentStoragePort.issueDownloadUrl(attachment.getFileUrl(), attachment.getFileName());
     }
 
     /*

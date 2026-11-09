@@ -100,7 +100,8 @@ public class SecurityConfig {
                         .requestMatchers(request -> environment.acceptsProfiles(org.springframework.core.env.Profiles.of("local"))
                                 && java.util.Set.of("PUT", "GET", "HEAD").contains(request.getMethod())
                                 && (request.getRequestURI().startsWith("/recordings/")
-                                    || request.getRequestURI().startsWith("/stt-temp/"))).permitAll()
+                                    || request.getRequestURI().startsWith("/stt-temp/")
+                                    || request.getRequestURI().startsWith("/project-attachments/"))).permitAll()
                         // ── 공개: 로그인 전 화면 ──
                         // 토큰을 받으러 오는 경로다. 여기에 인증을 걸면 아무도 로그인할 수 없다.
                         // refresh 는 갱신표 자체가 신분증이라 액세스 토큰을 요구하지 않는다.

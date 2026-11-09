@@ -23,8 +23,9 @@ MySQL·Redis는 루트 `compose.yml`로 실행한다. 비어 있는 MySQL 볼륨
   `ddl-auto=validate`로 구조가 코드와 맞지 않으면 부팅을 중단한다.
 - CORS는 기본적으로 `http://localhost:3000`, `http://127.0.0.1:3000`을 허용한다.
   백엔드는 루프백 주소에서만 수신한다.
-- `local`은 `prod`가 아니므로 기존 파일·녹음·STT 스텁이 선택된다.
-  프로파일 추가만으로 해당 기능이 실제 구현으로 바뀌지는 않는다.
+- `local`의 녹음과 프로젝트 첨부파일은 로컬 디스크에 실제 저장한다.
+  녹음 조립은 ffmpeg·ffprobe를 사용한다. STT는 별도 연동이 필요하며 로컬 스텁만으로
+  실제 전사가 완료되지는 않는다. 기본/테스트 프로파일의 저장소 스텁과 prod S3는 유지한다.
 
 ### MySQL·Redis 실행
 
@@ -379,3 +380,55 @@ CI의 호스트 도구 설치 여부에 영향을 받지 않게 했다. 이 검�
 
 완성본은 기존 서명 URL·Range 재생·개별/프로젝트 저장소 삭제와 같은 파일 루트를 사용한다.
 이 단계는 재생용 조립이며 STT 블록 오디오 조립·온디바이스 STT·AI 분석을 새로 연결하지 않는다.
+
+
+### 프로젝트 첨부파일 실제 저장 (`local`)
+
+프로젝트 첨부는 녹음 전용 경로와 분리된다. AWS 없이 PDF·문서 등 일반 파일을 저장하며,
+기존 FE 계약(업로드 URL 발급 → raw PUT → 확정)은 바꾸지 않는다.
+
+1. 로그인 후 `POST /api/projects/{projectId}/attachments/upload-url`에
+   `fileName`, `fileSize`를 보낸다. Owner 또는 관리자 겸직자만 발급할 수 있다.
+2. 응답의 `uploadUrl`에 파일 바이트를 `PUT`한다. multipart가 아니라 파일 본문 자체다.
+   JWT 없이 접근하지만 키·메서드·파일 크기·15분 만료를 묶은 서명을 검증한다.
+   브라우저가 정하는 `Content-Type`은 서명하지 않으므로 PDF가 녹음 형식 검사에 걸리지 않는다.
+3. `POST /api/projects/{projectId}/attachments/confirm`으로 `fileName`, `fileUrl`, `fileSize`를 보낸다.
+   `fileUrl`에는 업로드 응답의 **객체 키**를 그대로 넣는다. 실제 파일 존재·크기가 맞아야 등록된다.
+4. 로그인한 회사 구성원은
+   `GET /api/projects/{projectId}/attachments/{attachmentId}/download-url`로 5분 만료 URL을 받는다.
+   다운로드 URL은 JWT 대신 서명을 사용하며 GET·HEAD·Range를 지원한다.
+   응답은 `application/octet-stream`, `Content-Disposition: attachment`로 원본 파일명을 제공한다.
+   파일 내용을 실행하거나 실제 형식을 판별하는 기능은 제공하지 않는다.
+5. `DELETE /api/projects/{projectId}/attachments/{attachmentId}`는 Owner만 호출할 수 있다.
+   실제 파일 삭제 후 DB 메타데이터를 삭제한다. 파일이 이미 없어도 DB 삭제를 재시도할 수 있다.
+
+저장 위치: `${LOCAL_STORAGE_ROOT:-.local/storage}/project-attachments/company-{companyId}/project-{projectId}/{uuid}.{ext}`.
+확장자가 없는 파일도 지원한다. 파일은 서버 재시작 후에도 유지되며, 이미 있는 키에 덮어쓰지 않는다.
+파일명에서 사용한 마지막 확장자는 문자·숫자·밑줄·하이픈 1~32자로 제한한다.
+
+| 설정 | 기본값 | 설명 |
+|---|---|---|
+| `app.local-attachments.max-upload-bytes` / `LOCAL_ATTACHMENT_MAX_UPLOAD_BYTES` | `104857600` | 첨부파일 상한 100MiB. 1바이트~5GiB 사이로 설정 가능 |
+| `LOCAL_STORAGE_ROOT` | `.local/storage` | 녹음과 루트는 공유하고 첨부 전용 하위 경로를 사용 |
+| `LOCAL_STORAGE_BASE_URL` | `http://localhost:8080` | 시연 노트북의 루프백 백엔드 주소 |
+
+기존 JWT 비밀값으로 첨부 전용 범위의 HMAC을 계산한다. 별도 비밀 파일을 만들거나 수정하지 않는다.
+만료·변조·다른 키·다른 메서드의 서명은 `PJ-008` / 403으로 거부한다.
+기존 녹음 URL은 첨부파일 접근에 사용할 수 없다. URL 발급·확정·삭제 API의 JWT 검사는 유지한다.
+
+주요 오류: `PJ-009` / 413(크기 상한), `PJ-010` / 400(업로드 크기 불일치),
+`PJ-011` / 409(동일 키 재업로드), `PJ-012` / 400(확정할 실제 파일 없음·크기 불일치),
+`PJ-013` / 500(저장소 처리 실패). 업로드 실패 시 임시 파일은 정리한다.
+
+제한: 업로드 후 확정하지 않은 파일은 자동 정리하지 않는다. 삭제는 파일시스템과 DB 사이에
+분산 트랜잭션이 없으므로, DB 커밋 실패 시 파일만 먼저 지워질 수 있다. 이 경우 삭제를 재시도한다.
+첨부파일 용량은 기존 음성·자막용 저장소 사용량 집계에 추가하지 않는다.
+
+검증:
+
+```bash
+./gradlew test --tests '*LocalAttachment*Test' --tests '*ProjectAttachment*Test'
+```
+
+임시 테스트 저장소와 H2를 사용하므로 실제 시연 파일·DB를 삭제하지 않는다.
+최종적으로 프론트를 실제 BE 모드로 연결해 PDF 업로드 → 다운로드 → 삭제를 확인한다.

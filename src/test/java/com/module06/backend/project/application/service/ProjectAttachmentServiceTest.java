@@ -285,7 +285,7 @@ class ProjectAttachmentServiceTest {
         when(projectRepository.existsActiveByCompanyIdAndId(COMPANY, PROJECT_ID)).thenReturn(true);
         when(projectAttachmentRepository.findById(ATTACHMENT_ID))
                 .thenReturn(Optional.of(attachmentOf(PROJECT_ID, UPLOADER)));
-        when(projectAttachmentStoragePort.issueDownloadUrl(KEY))
+        when(projectAttachmentStoragePort.issueDownloadUrl(KEY, "spec.pdf"))
                 .thenReturn(new IssuedDownloadUrl("https://s3/get", 300));
 
         IssuedDownloadUrl result = service.issueDownloadUrl(
@@ -301,7 +301,7 @@ class ProjectAttachmentServiceTest {
         when(projectRepository.existsActiveByCompanyIdAndId(COMPANY, PROJECT_ID)).thenReturn(true);
         when(projectAttachmentRepository.findById(ATTACHMENT_ID))
                 .thenReturn(Optional.of(attachmentOf(PROJECT_ID, UPLOADER)));
-        when(projectAttachmentStoragePort.issueDownloadUrl(anyString()))
+        when(projectAttachmentStoragePort.issueDownloadUrl(anyString(), anyString()))
                 .thenReturn(new IssuedDownloadUrl("https://s3/get", 300));
 
         IssuedDownloadUrl result = service.issueDownloadUrl(
@@ -319,7 +319,7 @@ class ProjectAttachmentServiceTest {
                 .isInstanceOf(BusinessException.class)
                 .hasFieldOrPropertyWithValue("errorCode", ProjectErrorCode.PROJECT_NOT_FOUND);
 
-        verify(projectAttachmentStoragePort, never()).issueDownloadUrl(anyString());
+        verify(projectAttachmentStoragePort, never()).issueDownloadUrl(anyString(), anyString());
     }
 
     @Test
@@ -333,7 +333,7 @@ class ProjectAttachmentServiceTest {
                 .isInstanceOf(BusinessException.class)
                 .hasFieldOrPropertyWithValue("errorCode", ProjectErrorCode.ATTACHMENT_NOT_FOUND);
 
-        verify(projectAttachmentStoragePort, never()).issueDownloadUrl(anyString());
+        verify(projectAttachmentStoragePort, never()).issueDownloadUrl(anyString(), anyString());
     }
 
     private ProjectAttachment attachmentOf(Long projectId, Long uploadedBy) {
