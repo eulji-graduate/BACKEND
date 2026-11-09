@@ -518,6 +518,21 @@ class HandoverControllerTest {
                 HandoverType.OFFBOARDING, HandoverStatus.FINALIZED, START, END, null, 1, 1, 1, FINALIZED_AT, "Park");
     }
 
+    @Test
+    void listIncludesViewerDecisionAndLooksUpEachTeamOnce() throws Exception {
+        authenticateAs(APPROVER, COMPANY, "OWNER", false, null);
+        when(getHandoverListUseCase.list(any(GetHandoverListUseCase.HandoverListQuery.class)))
+                .thenReturn(List.of(summary(), summary()));
+        when(orgQueryPort.findTeamLeaderId(TEAM)).thenReturn(WRITER);
+        mockMvc.perform(get("/api/handovers"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[0].canFinalize").value(true))
+                .andExpect(jsonPath("$.data[0].requiresIntermediateApproval").value(false))
+                .andExpect(jsonPath("$.data[0].finalizeBlockReason").isEmpty())
+                .andExpect(jsonPath("$.data[1].canFinalize").value(true));
+        verify(orgQueryPort, org.mockito.Mockito.times(1)).findTeamLeaderId(TEAM);
+    }
+
     private static Handover submitted() {
         return Handover.restore(HANDOVER_ID, WRITER, TEAM, "Platform Team", HandoverType.VACATION, HandoverStatus.SUBMITTED,
                 START, END, null, "Kim", "Manager", null, null, null, null, null, null,

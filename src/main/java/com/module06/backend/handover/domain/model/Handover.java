@@ -165,9 +165,7 @@ public class Handover {
 
     public void finalizeApproval(Long approverId, String approverNameSnap, LocalDateTime at,
                                  boolean allowDirectLeaderFinalize) {
-        boolean directLeaderFinalizeAllowed = allowDirectLeaderFinalize
-                && status == HandoverStatus.SUBMITTED;
-        if (status != HandoverStatus.REASSIGNED && !directLeaderFinalizeAllowed) {
+        if (!HandoverFinalApproval.isReady(status, allowDirectLeaderFinalize)) {
             throw new BusinessException(HandoverErrorCode.HO_FINALIZE_NOT_ALLOWED);
         }
         requireId(approverId, "approverId");

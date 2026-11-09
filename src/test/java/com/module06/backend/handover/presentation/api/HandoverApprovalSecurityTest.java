@@ -198,6 +198,74 @@ class HandoverApprovalSecurityTest {
         }
     }
 
+    @ParameterizedTest
+    @CsvSource({"false, false", "true, false", "false, true", "true, true"})
+    void ownerReadFlagsAgreeWithFinalizeEndpoint(boolean writerIsLeader, boolean reassigned) throws Exception {
+        stubHandover(reassigned);
+        when(organization.findMemberIdsByCompany(COMPANY)).thenReturn(List.of(WRITER));
+        when(organization.findTeamLeaderId(TEAM)).thenReturn(writerIsLeader ? WRITER : LEADER);
+        when(organization.findMember(LEADER)).thenReturn(new OrgQueryPort.MemberSnapshot(LEADER, "Owner", "대표"));
+        boolean ready = writerIsLeader || reassigned;
+        var read = mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/handovers/1000")
+                .header("Authorization", bearer("OWNER", false)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.canFinalize").value(ready))
+                .andExpect(jsonPath("$.data.requiresIntermediateApproval").value(!ready));
+        if (ready) {
+            read.andExpect(jsonPath("$.data.finalizeBlockReason").isEmpty());
+            when(repository.save(any())).thenAnswer(call -> call.getArgument(0));
+        } else {
+            read.andExpect(jsonPath("$.data.finalizeBlockReason").value("INTERMEDIATE_APPROVAL_REQUIRED"));
+        }
+        var write = mockMvc.perform(patch("/api/handovers/1000/finalize").header("Authorization", bearer("OWNER", false)));
+        if (ready) {
+            write.andExpect(status().isOk()).andExpect(jsonPath("$.data.canFinalize").value(false))
+                    .andExpect(jsonPath("$.data.finalizeBlockReason").value("ALREADY_FINALIZED"));
+        } else {
+            write.andExpect(status().isConflict());
+            verifyNoInteractions(memberStatus);
+        }
+    }
+
+    @ParameterizedTest
+    @CsvSource({"MEMBER, true", "LEADER, true", "MEMBER, false", "LEADER, false"})
+    void nonOwnerCanReadButCannotFinalizeEvenAfterIntermediateApproval(String role, boolean admin) throws Exception {
+        stubHandover(true);
+        when(organization.findMemberIdsByCompany(COMPANY)).thenReturn(List.of(WRITER));
+        String jwt = "Bearer " + tokens.createAccessToken(new AuthPrincipal(WRITER, COMPANY, role, admin, TEAM));
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/handovers/1000")
+                .header("Authorization", jwt)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.canFinalize").value(false))
+                .andExpect(jsonPath("$.data.requiresIntermediateApproval").value(false))
+                .andExpect(jsonPath("$.data.finalizeBlockReason").value("OWNER_REQUIRED"));
+        mockMvc.perform(patch("/api/handovers/1000/finalize").header("Authorization", jwt)).andExpect(status().isForbidden());
+        verifyNoInteractions(memberStatus);
+    }
+
+    @org.junit.jupiter.api.Test
+    void laterTeamLeaderChangeIsReflectedOnReadAndWriteWithoutAuthorityGuessing() throws Exception {
+        stubHandover(false);
+        when(organization.findMemberIdsByCompany(COMPANY)).thenReturn(List.of(WRITER));
+        when(organization.findTeamLeaderId(TEAM)).thenReturn(WRITER);
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/handovers/1000")
+                .header("Authorization", bearer("OWNER", false))).andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.canFinalize").value(true));
+        when(organization.findMember(LEADER)).thenReturn(new OrgQueryPort.MemberSnapshot(LEADER, "Owner", "대표"));
+        // The team leader changes after the page was read; the write endpoint must evaluate again.
+        when(organization.findTeamLeaderId(TEAM)).thenReturn(LEADER);
+        mockMvc.perform(patch("/api/handovers/1000/finalize").header("Authorization", bearer("OWNER", false)))
+                .andExpect(status().isConflict()).andExpect(jsonPath("$.errorCode").value("HO-018"));
+        verifyNoInteractions(memberStatus);
+    }
+
+    @org.junit.jupiter.api.Test
+    void approvalMetadataDoesNotOpenAnotherCompanysRequest() throws Exception {
+        stubHandover(true);
+        when(organization.findMemberIdsByCompany(COMPANY)).thenReturn(List.of());
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/handovers/1000")
+                .header("Authorization", bearer("OWNER", false))).andExpect(status().isForbidden());
+    }
+
     private String bearer(String role, boolean admin) {
         return "Bearer " + tokens.createAccessToken(new AuthPrincipal(LEADER, COMPANY, role, admin, TEAM));
     }

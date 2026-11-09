@@ -432,3 +432,47 @@ CI의 호스트 도구 설치 여부에 영향을 받지 않게 했다. 이 검�
 
 임시 테스트 저장소와 H2를 사용하므로 실제 시연 파일·DB를 삭제하지 않는다.
 최종적으로 프론트를 실제 BE 모드로 연결해 PDF 업로드 → 다운로드 → 삭제를 확인한다.
+
+
+### 휴직·오프보딩 최종 승인 판단 응답
+
+`GET /api/handovers`의 목록 원소와 `GET /api/handovers/{id}` 상세에 다음 필드를 추가한다.
+같은 DTO를 쓰는 신청 생성·재배정·중간 승인·최종 승인·반려 응답 및 귀속 대기 목록에도 포함된다.
+`/package`·`/insights` 응답이나 사원 목록 응답에 추가되는 필드는 아니다.
+
+| 필드 | 타입 | 의미 |
+|---|---|---|
+| `canFinalize` | boolean | 현재 조회자가 지금 이 신청을 최종 승인할 수 있는지 |
+| `requiresIntermediateApproval` | boolean | 현재 팀장 중간 승인이 더 필요한지. 완료 이력 자체가 아니라 남은 절차를 뜻함 |
+| `finalizeBlockReason` | string 또는 null | 승인 불가 사유. 승인 가능하면 null |
+
+기존 최종 승인 API의 정책을 그대로 사용한다. **현재 실제 팀장**(팀의 `leaderMemberId`)이
+신청자인지로 직접 승인 경로를 결정한다. 신청 당시 권한 스냅샷이나 현재 Member/Leader 라벨을
+추정해 판정하지 않는다. 이번 작업에서는 신청 당시 권한 저장·DB 스키마 변경을 하지 않는다.
+이 판정은 휴직(VACATION)과 오프보딩(OFFBOARDING)에 공통으로 적용된다.
+
+| 상태·조회자 | canFinalize | requiresIntermediateApproval | finalizeBlockReason |
+|---|---|---|---|
+| Owner, 일반 팀원 SUBMITTED | false | true | INTERMEDIATE_APPROVAL_REQUIRED |
+| Owner, 현재 팀장 본인 SUBMITTED | true | false | null |
+| Owner, REASSIGNED | true | false | null |
+| Owner 아닌 관리자·팀장·팀원, 일반 팀원 SUBMITTED | false | true | OWNER_REQUIRED |
+| Owner 아닌 관리자·팀장·팀원, 현재 팀장 SUBMITTED 또는 REASSIGNED | false | false | OWNER_REQUIRED |
+| FINALIZED | false | false | ALREADY_FINALIZED |
+| REJECTED | false | false | ALREADY_REJECTED |
+
+사유 우선순위는 종료 상태 → Owner 권한 → 중간 승인 대기 순서다.
+예: 관리자 겸직자가 중간 승인 전 신청을 조회하면 사유는 OWNER_REQUIRED이지만,
+requiresIntermediateApproval은 true이므로 진행 단계도 함께 안내할 수 있다.
+
+프론트 연동 요청:
+- 실제 BE 모드에서는 최종 승인 버튼의 가능 여부를 `canFinalize`로 판단한다.
+- `requiresIntermediateApproval`로 팀장 중간 승인 대기 안내를 표시한다.
+- `finalizeBlockReason`은 사용자 문구로 매핑한다. 이 값은 HTTP 오류 코드가 아니다.
+- `canFinalize`가 false여도 반려까지 불가능하다는 뜻은 아니다. 반려는 기존 권한·단계 규칙을 유지한다.
+- 신청자 권한을 현재 값으로 추정하는 기존 로직을 최종 승인 버튼 판정에서 제거한다.
+- 이 필드는 신청 당시 권한 스냅샷을 대체하지 않으므로, 신청 당시 직책을 표시하는 근거로 쓰지 않는다.
+
+조회 권한과 회사 범위는 기존처럼 먼저 검증한다. 응답 필드는 권한을 부여하는 토큰이 아니다.
+조회 뒤 팀장·신청 상태가 바뀔 수 있으므로 `PATCH /api/handovers/{id}/finalize`는 호출 시점에 다시 검증한다.
+또한 canFinalize는 결재 자격·절차 상태의 판단이지, 후속 DB·액션·분석 처리의 성공을 보장하지 않는다.

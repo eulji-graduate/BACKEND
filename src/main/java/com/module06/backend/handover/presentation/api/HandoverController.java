@@ -17,6 +17,7 @@ import com.module06.backend.handover.application.usecase.ReassignHandoverItemUse
 import com.module06.backend.handover.application.usecase.RejectHandoverUseCase;
 import com.module06.backend.handover.domain.exception.HandoverErrorCode;
 import com.module06.backend.handover.domain.model.Handover;
+import com.module06.backend.handover.domain.model.HandoverFinalApproval;
 import com.module06.backend.handover.domain.model.HandoverStatus;
 import com.module06.backend.handover.presentation.api.dto.request.AttributeToLeaderRequest;
 import com.module06.backend.handover.presentation.api.dto.request.CreateHandoverRequest;
@@ -44,6 +45,9 @@ import org.springframework.web.bind.annotation.RestController;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
+import java.util.HashMap;
+import java.util.Objects;
 
 @RestController
 @RequestMapping("/api/handovers")
@@ -98,9 +102,11 @@ public class HandoverController {
     public ApiResponse<List<HandoverSummaryResponse>> list(
             @Parameter(hidden = true) @AuthenticationPrincipal AuthPrincipal principal,
             @RequestParam(required = false) HandoverStatus status) {
+        Map<Long, Long> leaders = new HashMap<>();
         List<HandoverSummaryResponse> data = getHandoverListUseCase
                 .list(scopeFor(principal, status)).stream()
-                .map(HandoverSummaryResponse::from)
+                .map(summary -> HandoverSummaryResponse.from(summary, approvalFor(summary.status(),
+                        summary.writerMemberId(), summary.teamId(), principal, leaders)))
                 .toList();
         return ApiResponse.success("인수인계 목록을 조회했습니다.", data);
     }
@@ -127,9 +133,11 @@ public class HandoverController {
         if (principal == null || principal.companyId() == null) {
             throw new BusinessException(HandoverErrorCode.HO_COMPANY_CONTEXT_REQUIRED);
         }
+        Map<Long, Long> leaders = new HashMap<>();
         List<HandoverSummaryResponse> data = getPendingAttributionListUseCase
                 .listPendingAttribution(principal.companyId()).stream()
-                .map(HandoverSummaryResponse::from)
+                .map(summary -> HandoverSummaryResponse.from(summary, approvalFor(summary.status(),
+                        summary.writerMemberId(), summary.teamId(), principal, leaders)))
                 .toList();
         return ApiResponse.success("귀속 대기 인수인계 목록을 조회했습니다.", data);
     }
@@ -142,7 +150,7 @@ public class HandoverController {
                                              @AuthenticationPrincipal AuthPrincipal principal) {
         Handover handover = getHandoverUseCase.get(id);
         assertCanRead(handover, principal);
-        return ApiResponse.success("인수인계 상세를 조회했습니다.", HandoverResponse.from(handover));
+        return ApiResponse.success("인수인계 상세를 조회했습니다.", responseFor(handover, principal));
     }
 
     /*
@@ -178,7 +186,7 @@ public class HandoverController {
                                                 @Valid @RequestBody CreateHandoverRequest request) {
         Handover handover = createHandoverUseCase.create(
                 request.toCommand(principal.getMemberId(), principal.getTeamId()));
-        return ApiResponse.created("Handover created.", HandoverResponse.from(handover));
+        return ApiResponse.created("Handover created.", responseFor(handover, principal));
     }
 
     @PatchMapping("/{id}/items/{actionId}/reassign")
@@ -191,7 +199,7 @@ public class HandoverController {
         Handover handover = reassignHandoverItemUseCase.reassignItem(
                 request.toCommand(id, actionId, LocalDateTime.now(), principal)
         );
-        return ApiResponse.success("Handover item reassigned.", HandoverResponse.from(handover));
+        return ApiResponse.success("Handover item reassigned.", responseFor(handover, principal));
     }
 
     /*
@@ -205,7 +213,7 @@ public class HandoverController {
                                                   @Parameter(hidden = true)
                                                   @AuthenticationPrincipal AuthPrincipal principal) {
         Handover handover = completeHandoverUseCase.complete(id, principal, LocalDateTime.now());
-        return ApiResponse.success("Handover completed.", HandoverResponse.from(handover));
+        return ApiResponse.success("Handover completed.", responseFor(handover, principal));
     }
 
     // 최종 승인은 Owner 전용. 같은 회사 건인지는 서비스에서 다시 검증한다.
@@ -215,7 +223,7 @@ public class HandoverController {
                                                   @Parameter(hidden = true)
                                                   @AuthenticationPrincipal AuthPrincipal principal) {
         Handover handover = finalizeHandoverUseCase.finalize(id, principal, LocalDateTime.now());
-        return ApiResponse.success("Handover finalized.", HandoverResponse.from(handover));
+        return ApiResponse.success("Handover finalized.", responseFor(handover, principal));
     }
 
     /*
@@ -234,7 +242,7 @@ public class HandoverController {
         // 회사 스코프는 토큰에서 — 서비스가 작성자·신규 팀장이 이 회사 소속인지 검증(크로스컴퍼니 차단).
         Handover handover = attributeHandoverToLeaderUseCase.attributeToNewLeader(
                 request.toCommand(id, principal.companyId(), LocalDateTime.now()));
-        return ApiResponse.success("신규 팀장에게 인수인계 액션을 일괄 이관했습니다.", HandoverResponse.from(handover));
+        return ApiResponse.success("신규 팀장에게 인수인계 액션을 일괄 이관했습니다.", responseFor(handover, principal));
     }
 
     // 최종 반려는 Owner, 중간 반려는 해당 팀 현 팀장만 허용한다. 단계·회사 검증은 서비스에서 수행한다.
@@ -245,7 +253,26 @@ public class HandoverController {
                                                 @AuthenticationPrincipal AuthPrincipal principal,
                                                 @Valid @RequestBody RejectHandoverRequest request) {
         Handover handover = rejectHandoverUseCase.reject(request.toCommand(id, principal));
-        return ApiResponse.success("Handover rejected.", HandoverResponse.from(handover));
+        return ApiResponse.success("Handover rejected.", responseFor(handover, principal));
+    }
+
+    private HandoverResponse responseFor(Handover handover, AuthPrincipal principal) {
+        return HandoverResponse.from(handover, approvalFor(handover.getStatus(), handover.getWriterMemberId(),
+                handover.getTeamId(), principal, new HashMap<>()));
+    }
+
+    /** Read access is checked before this projection; company scope is never taken from request parameters. */
+    private HandoverFinalApproval approvalFor(HandoverStatus status, Long writerId, Long teamId,
+                                             AuthPrincipal principal, Map<Long, Long> leaders) {
+        boolean currentLeader = false;
+        if (status == HandoverStatus.SUBMITTED) {
+            // Cache null leaders too: at most one organization lookup per team in a list response.
+            if (!leaders.containsKey(teamId)) leaders.put(teamId, orgQueryPort.findTeamLeaderId(teamId));
+            currentLeader = writerId != null && Objects.equals(writerId, leaders.get(teamId));
+        }
+        boolean owner = principal != null && principal.memberId() != null && principal.companyId() != null
+                && "OWNER".equals(principal.authority());
+        return HandoverFinalApproval.evaluate(status, currentLeader, owner);
     }
 
     /*
