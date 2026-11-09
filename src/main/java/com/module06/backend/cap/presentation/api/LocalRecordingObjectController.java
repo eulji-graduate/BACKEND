@@ -8,6 +8,12 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.access.prepost.PreAuthorize;
+import com.module06.backend.cap.domain.exception.CapErrorCode;
+import com.module06.backend.global.exception.ErrorResponse;
+import com.module06.backend.global.audit.AuthzAuditLogger;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -21,6 +27,7 @@ public class LocalRecordingObjectController {
     private final LocalRecordingStorageUseCase storage;
     public LocalRecordingObjectController(LocalRecordingStorageUseCase storage) { this.storage = storage; }
 
+    @PreAuthorize("@localRecordingUrlAuthorization.authorize(#token, #request)")
     @PutMapping({"/recordings/{*objectKey}", "/stt-temp/{*objectKey}"})
     public ResponseEntity<Void> upload(@RequestParam(required = false) String token, HttpServletRequest request)
             throws IOException {
@@ -28,6 +35,7 @@ public class LocalRecordingObjectController {
         return ResponseEntity.noContent().header(HttpHeaders.CACHE_CONTROL, "no-store").build();
     }
 
+    @PreAuthorize("@localRecordingUrlAuthorization.authorize(#token, #request)")
     @GetMapping({"/recordings/{*objectKey}", "/stt-temp/{*objectKey}"})
     public ResponseEntity<Resource> playback(@RequestParam(required = false) String token, HttpServletRequest request) {
         var file = storage.playback(token, requestKey(request));
@@ -37,6 +45,13 @@ public class LocalRecordingObjectController {
                 .header("X-Content-Type-Options", "nosniff")
                 .body(new FileSystemResource(file.path()));
     }
+    @ExceptionHandler(AccessDeniedException.class)
+    public ResponseEntity<ErrorResponse> invalidSignedUrl(HttpServletRequest request) {
+        AuthzAuditLogger.deniedByFilter(request, CapErrorCode.CAP_LOCAL_SIGNATURE_INVALID.getCode());
+        return ResponseEntity.status(403).body(ErrorResponse.of(CapErrorCode.CAP_LOCAL_SIGNATURE_INVALID,
+                request.getRequestURI(), org.slf4j.MDC.get("traceId")));
+    }
+
     private String requestKey(HttpServletRequest request) {
         return org.springframework.web.util.UriUtils.decode(request.getRequestURI().substring(1),
                 java.nio.charset.StandardCharsets.UTF_8);

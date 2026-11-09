@@ -60,6 +60,19 @@ public class LocalRecordingStorageService implements LocalRecordingStorageUseCas
     public boolean matches(String key, long size) { return files.matches(key, size); }
     public void delete(String key) { files.delete(key); }
 
+    /** Method-security gate; no file reads or writes happen until authorization succeeds. */
+    @Override
+    public boolean isAuthorized(String method, String token, String requestedKey, String contentType) {
+        if (!"PUT".equals(method) && !"GET".equals(method)) return false;
+        try {
+            Claims claims = verify(method, token);
+            return claims.key().equals(requestedKey)
+                    && (!"PUT".equals(method) || claims.contentType().equals(normalizeType(contentType)));
+        } catch (BusinessException | IllegalArgumentException error) {
+            return false;
+        }
+    }
+
     @Override
     public void upload(String token, String requestedKey, String contentType, InputStream input, long contentLength) {
         Claims claims = verify("PUT", token);

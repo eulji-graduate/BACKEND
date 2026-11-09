@@ -4,6 +4,7 @@ import java.io.InputStream;
 import java.nio.file.Path;
 
 public interface LocalRecordingStorageUseCase {
+    boolean isAuthorized(String method, String token, String requestedKey, String contentType);
     void upload(String token, String requestedKey, String contentType, InputStream input, long contentLength);
     StoredRecording playback(String token, String requestedKey);
     record StoredRecording(Path path, String contentType) { }

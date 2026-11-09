@@ -121,7 +121,10 @@ class LocalRecordingHttpIntegrationTest {
                 .andExpect(status().isForbidden());
         var upload = issue();
         mvc.perform(get(URI.create(upload.url()))).andExpect(status().isForbidden());
-        mvc.perform(get("/recordings/org-1/meeting-10/missing.wav")).andExpect(status().isForbidden());
+        mvc.perform(get("/recordings/org-1/meeting-10/missing.wav")).andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.errorCode").value("CAP-026"));
+        mvc.perform(get("/recordings/org-1/meeting-10/missing.wav").header("Authorization",bearer(11L,1L)))
+                .andExpect(status().isForbidden()).andExpect(jsonPath("$.errorCode").value("CAP-026"));
         mvc.perform(get("/recordings/org-1/meeting-10/missing.wav").param("token","bad"))
                 .andExpect(status().isForbidden());
         mvc.perform(put(URI.create(upload.url())).contentType("audio/mp3").content(AUDIO))

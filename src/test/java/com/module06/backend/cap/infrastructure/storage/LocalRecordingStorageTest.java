@@ -63,6 +63,24 @@ class LocalRecordingStorageTest {
     }
 
     @Test
+    void methodSecurityRequiresValidSignatureAndExactFileScopeWithoutFileAccess() {
+        var storage = service(0);
+        String upload = token(storage.issueUploadUrl(KEY,"audio/wav"));
+        assertThat(storage.isAuthorized("PUT",upload,KEY,"audio/wav")).isTrue();
+        assertThat(service(900).isAuthorized("PUT",upload,KEY,"audio/wav")).isFalse();
+        assertThat(storage.isAuthorized("GET",upload,KEY,null)).isFalse();
+        assertThat(storage.isAuthorized("PUT",upload,"recordings/org-2/meeting-2/test.wav","audio/wav")).isFalse();
+        assertThat(storage.isAuthorized("PUT",upload,KEY,"audio/mp3")).isFalse();
+        assertThat(storage.isAuthorized("PUT",upload,KEY,"text/html")).isFalse();
+        assertThat(storage.isAuthorized("PUT",null,KEY,"audio/wav")).isFalse();
+        assertThat(root.resolve(KEY)).doesNotExist();
+        storage.upload(upload,KEY,"audio/wav",data(),4);
+        String playback = token(storage.issuePlaybackUrl(KEY));
+        assertThat(storage.isAuthorized("GET",playback,KEY,null)).isTrue();
+        assertThat(storage.isAuthorized("DELETE",playback,KEY,null)).isFalse();
+    }
+
+    @Test
     void refusesOverwriteAndCleansPartialOrOversizedUploads() throws Exception {
         var files = new LocalRecordingFileAdapter(root.toString(),32);
         files.store(KEY,data(),4);
