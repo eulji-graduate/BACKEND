@@ -31,6 +31,13 @@ jobs:
           java-version: "17"
           cache: gradle
 
+      - name: Test Gradle download preparation
+        run: python3 -B -m unittest discover -s scripts/tests -p test_prepare_gradle.py -v
+
+      - name: Prepare verified Gradle distribution
+        timeout-minutes: 15
+        run: python3 scripts/prepare-gradle.py
+
       - name: Grant execute permission
         run: chmod +x gradlew
 
@@ -61,6 +68,10 @@ jobs:
           distribution: temurin
           java-version: "17"
           cache: gradle
+
+      - name: Prepare verified Gradle distribution
+        timeout-minutes: 15
+        run: python3 scripts/prepare-gradle.py
 
       - name: Grant execute permission
         run: chmod +x gradlew
@@ -182,6 +193,10 @@ jobs:
           distribution: temurin
           java-version: "17"
           cache: gradle
+
+      - name: Prepare verified Gradle distribution
+        timeout-minutes: 15
+        run: python3 scripts/prepare-gradle.py
 
       - name: Grant execute permission
         run: chmod +x gradlew
