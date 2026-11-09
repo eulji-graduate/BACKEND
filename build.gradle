@@ -141,7 +141,7 @@ tasks.named('test') {
 	// 힙 설정은 여기 두지 않는다 — 아래 tasks.withType(Test) 가 test 를 포함해 일괄로 잡는다.
 	// 양쪽에 두면 값이 갈렸을 때 어느 쪽이 이기는지 읽는 사람이 알 수 없다.
 	useJUnitPlatform {
-		excludeTags 'migration', 'local-sql'
+		excludeTags 'migration', 'local-sql', 'local-media'
 	}
 }
 
@@ -307,3 +307,14 @@ tasks.register('reviewFix', Exec) {
 // 부르면 중첩 gradle(프로젝트 락)이다. 드라이버는 gradle 바깥에서 도므로 스크립트를 직접 부른다:
 //   bash scripts/review-verify.sh [--with-test]      # 검증(컴파일 / 커밋 직전 테스트)
 //   bash scripts/review-session.sh                   # (선택) 격리 worktree+브랜치 준비
+
+
+// Explicit native media verification; regular CI tests remain independent of host ffmpeg installation.
+tasks.register('localAssemblyCheck', Test) {
+    group = 'verification'
+    description = '실제 ffmpeg/ffprobe로 로컬 녹음 조립·재생·삭제를 검증한다.'
+    useJUnitPlatform { includeTags 'local-media' }
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath
+    shouldRunAfter(test)
+}
