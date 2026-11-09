@@ -9,11 +9,11 @@ import com.module06.backend.cap.application.port.out.CapObjectStoragePort;
 
 /* comment.
     CapObjectStoragePort 개발용 구현체(project의 ProjectAttachmentStorageStubAdapter와 동일 패턴).
-    운영은 CapS3ObjectStorageAdapter(#155)가 대신하므로 @Profile("!prod")로 운영에서만 확실히
+    운영은 CapS3ObjectStorageAdapter(#155)가 대신하므로 @Profile("!prod & !local")로 운영에서만 확실히
     안 뜨게 막는다. 실제 파일 업로드 없음: 가짜 URL 문자열만 돌려준다.
 */
 @Component
-@Profile("!prod")
+@Profile("!prod & !local")
 public class CapObjectStorageStubAdapter implements CapObjectStoragePort {
 
     private static final Logger log = LoggerFactory.getLogger(CapObjectStorageStubAdapter.class);

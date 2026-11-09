@@ -61,8 +61,9 @@ public class SecurityConfig {
     public CorsConfigurationSource corsConfigurationSource(CorsProperties corsProperties) {
         CorsConfiguration configuration = new CorsConfiguration();
         configuration.setAllowedOrigins(corsProperties.allowedOrigins());
-        configuration.setAllowedMethods(List.of("GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"));
+        configuration.setAllowedMethods(List.of("GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS", "HEAD"));
         configuration.setAllowedHeaders(List.of("*"));
+        configuration.setExposedHeaders(List.of("Content-Range", "Accept-Ranges", "Content-Length"));
 
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", configuration);
@@ -74,7 +75,8 @@ public class SecurityConfig {
                                                    JwtAuthenticationFilter jwtAuthenticationFilter,
                                                    RateLimitFilter rateLimitFilter,
                                                    SecurityErrorResponder securityErrorResponder,
-                                                   CorsConfigurationSource corsConfigurationSource) throws Exception {
+                                                   CorsConfigurationSource corsConfigurationSource,
+                                                   org.springframework.core.env.Environment environment) throws Exception {
         return http
                 // CSRF 를 끄는 것이 맞다 — 이 API 에는 브라우저가 자동으로 붙이는 자격증명이 없다.
                 // 세션을 쓰지 않고(아래 STATELESS), 토큰은 Authorization 헤더에서만 읽으며
@@ -94,6 +96,11 @@ public class SecurityConfig {
                         .authenticationEntryPoint(securityErrorResponder)
                         .accessDeniedHandler(securityErrorResponder))
                 .authorizeHttpRequests(auth -> auth
+                        // Local file requests carry a method-bound expiring signature, verified by the local-only controller.
+                        .requestMatchers(request -> environment.acceptsProfiles(org.springframework.core.env.Profiles.of("local"))
+                                && java.util.Set.of("PUT", "GET", "HEAD").contains(request.getMethod())
+                                && (request.getRequestURI().startsWith("/recordings/")
+                                    || request.getRequestURI().startsWith("/stt-temp/"))).permitAll()
                         // ── 공개: 로그인 전 화면 ──
                         // 토큰을 받으러 오는 경로다. 여기에 인증을 걸면 아무도 로그인할 수 없다.
                         // refresh 는 갱신표 자체가 신분증이라 액세스 토큰을 요구하지 않는다.

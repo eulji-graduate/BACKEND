@@ -284,8 +284,53 @@ DONE 프로젝트만 허용하며 녹음·업로드·STT·분석 처리 중인 �
 로컬 삭제 어댑터의 파일 루트 기본값은 백엔드 실행 디렉터리의 `.local/storage`이며,
 `app.local-storage.root` 설정으로 변경할 수 있다. 저장 키를 이 루트 아래 상대 경로로 해석한다.
 회사·회의 접두가 일치하는 `recordings/org-{companyId}/meeting-{meetingId}/...`와
-`stt-temp/org-{companyId}/meeting-{meetingId}/...`만 허용한다. 외부 URL, 경로 이탈, 심볼릭 링크는 거절한다.
+`stt-temp/org-{companyId}/meeting-{meetingId}/...`, 해당 회사의 온라인 회의 임시 키를 허용한다. 외부 URL, 경로 이탈, 심볼릭 링크는 거절한다.
 
-이 작업은 파일 **삭제**를 연결한다. 기존 로컬 업로드·재생 URL 발급은 스텁이므로 실제 녹음 시연을 위해서는
-후속 로컬 저장 구현이 같은 파일 루트와 저장 키 규칙을 사용해야 한다. 시드의 저장 용량은 합성 집계이며 실제 GB 단위 파일을 생성하지 않는다.
+local 프로파일의 수동 녹음 업로드·재생과 파일 삭제는 같은 파일 루트와 저장 키 규칙을 사용한다.
+자동 녹음의 청크 조립과 STT·AI 처리는 후속 연결이 필요하다. 시드의 저장 용량은 합성 집계이며 실제 GB 단위 파일을 생성하지 않는다.
 FRONTEND 구독 화면은 더미이므로 삭제 후 사용량 변화는 저장소 화면에만 반영된다.
+
+
+## 로컬 녹음 업로드·재생
+
+`local` 프로파일에서 녹음 파일은 호스트 노트북에 저장한다. AWS나 별도 파일 서버는 필요하지 않다.
+기본/테스트 프로파일의 기존 저장소 스텁과 prod의 기존 S3 어댑터는 유지한다.
+
+| 설정 | 기본값 | 설명 |
+|---|---|---|
+| `app.local-storage.root` / `LOCAL_STORAGE_ROOT` | `.local/storage` | 업로드·개별 삭제·프로젝트 삭제가 공유하는 루트 |
+| `app.local-storage.base-url` / `LOCAL_STORAGE_BASE_URL` | `http://localhost:8080` | 실제 백엔드 포트 기준의 루프백 HTTP 주소 |
+| `app.local-storage.max-upload-bytes` / `LOCAL_STORAGE_MAX_UPLOAD_BYTES` | `5368709120` | 파일 상한. 5GiB 이내로 낮출 수 있음 |
+
+상대 파일 루트는 백엔드 실행 디렉터리 기준이므로 재실행 때 동일한 디렉터리를 사용한다.
+설정 경로가 달라지면 이전 파일을 찾을 수 없다. `.local/storage/`는 Git에 포함하지 않는다.
+JWT 비밀값을 기반으로 별도 용도의 HMAC 서명을 계산하므로 추가 비밀 설정은 필요하지 않다.
+
+FRONTEND 연동 순서:
+
+1. 기존 인증으로 `POST /api/meetings/{meetingId}/recordings/manual/upload-url` 호출.
+2. 응답의 `uploadUrl`에 파일 바이트를 직접 **PUT**. 발급 요청과 동일한 `Content-Type`을 보낸다.
+   multipart/form-data가 아니며 별도 Authorization 헤더는 필요 없다. 성공은 HTTP 204.
+3. PUT 성공 후 기존 `POST /api/meetings/{meetingId}/recordings/manual`로
+   `s3Key`, 표시용 `fileName`, 실제 `sizeBytes`를 보내 등록한다.
+4. 기존 인증으로 `GET /api/meetings/{meetingId}/recordings/playback-url` 호출 후
+   응답의 `url`을 audio 요소 등에 그대로 사용한다. GET·HEAD·Range 요청을 지원한다.
+
+`s3Key`라는 기존 필드 이름과 URL 응답 구조는 유지한다. 로컬에서는 S3가 아닌 상대 파일 키다.
+서명 URL은 `http://localhost:8080/{저장키}?token=...` 형식이다. 기존 청크 클라이언트처럼
+URL pathname을 디코드해 키를 추출해도 같은 값이 나온다. 온라인 회의의
+`recordings/org-{companyId}/member-{memberId}/online-pending/...` 형식과 한글 파일명도 지원한다.
+다른 프로젝트가 같은 온라인 녹음 키를 공유하면 프로젝트 저장소 일괄 삭제는 409 MT-012로 막는다.
+URL을 특정 도메인으로 치환하거나 Bearer 토큰으로 바꾸지 않는다.
+PUT URL은 15분, 재생 URL은 3시간 유효하다. 파일 키·메서드·만료 시각과 PUT Content-Type을 서명으로 검증한다.
+파일 URL은 소지자에게 해당 파일 접근을 허용하는 임시 자격이므로 공유·저장하지 않는다.
+
+- 같은 키의 기존 파일은 덮어쓰지 않는다(409 CAP-027). 실패 후 파일이 없는 상태라면 유효한 PUT URL로 재시도할 수 있다.
+- 업로드 중인 임시 파일은 재생·완료 검증 대상에 노출하지 않는다. 파일 존재·크기가 맞아야 완료 통보가 성공한다.
+- 기존 녹음 삭제 API와 관리자 저장소 삭제가 실제 파일을 삭제한다. 미확인 STT 상태의 개별 삭제는 기존 confirm 규칙을 따른다.
+- 403 CAP-026: 서명 만료·변조·잘못된 메서드 또는 PUT Content-Type 불일치.
+- 409 CAP-027: 기존 파일 덮어쓰기 시도. 503 CAP-028: 로컬 파일 I/O 실패.
+- 400 CAP-029: 잘못된 경로. 400 CAP-030: 전송 길이 불일치. 413 CAP-024: 빈 파일·용량 상한 초과.
+- 유효하지 않은 Range는 416, 삭제되었거나 없는 파일은 404다.
+
+이번 단계는 수동 녹음과 청크 파일 저장까지다. 청크 자동 조립, 온디바이스 STT, AI 분석, 프로젝트 첨부파일은 별도 작업이다.
