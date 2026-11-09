@@ -44,6 +44,15 @@ class ProjectAttachmentSecurityTest {
     private JwtTokenProvider jwtTokenProvider;
 
     @Test
+    void rawAttachmentFilesAreNotPublicOutsideLocalProfile() throws Exception {
+        String path = "/project-attachments/company-1/project-100/12345678-1234-1234-1234-123456789abc.pdf";
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get(path))
+                .andExpect(status().isUnauthorized());
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put(path).content("data"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
     @DisplayName("OWNER는 통과한다 — 인가를 지나 애플리케이션까지 닿는다")
     void ownerReachesApplication() throws Exception {
         String bearer = bearerFor(new AuthPrincipal(3L, 1L, "OWNER", false, null));

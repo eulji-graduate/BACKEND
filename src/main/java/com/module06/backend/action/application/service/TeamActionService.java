@@ -181,7 +181,7 @@ public class TeamActionService implements
                 .findProjectAttachmentById(attachmentId, action.getProjectId())
                 .orElseThrow(() -> new BusinessException(ActionErrorCode.ACTION_ATTACHMENT_NOT_FOUND));
 
-        return projectAttachmentStoragePort.issueDownloadUrl(attachment.fileUrl());
+        return projectAttachmentStoragePort.issueDownloadUrl(attachment.fileUrl(), attachment.fileName());
     }
 
     // 2026-08-11, 이슈 #352 — 팀 대시보드 KPI 4종. 4개 다 단순 COUNT라 트랜잭션 하나로 묶는다.
