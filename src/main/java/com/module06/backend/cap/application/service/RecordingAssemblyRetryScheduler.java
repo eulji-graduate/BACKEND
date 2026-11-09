@@ -71,8 +71,8 @@ public class RecordingAssemblyRetryScheduler {
             return;
         }
         if (retry.attempts() >= MAX_ATTEMPTS) {
-            log.error("디스크 용량 부족 재시도 {}회 소진 — 포기한다. 사람이 CAP-05로 직접 재시도해야 "
-                    + "한다(또는 디스크 여유 확인). meetingId={}", MAX_ATTEMPTS, meetingId);
+            log.error("녹음 조립 재시도 {}회 소진 — 중단한다. 녹음 상태와 실행 도구·디스크를 확인해야 "
+                    + "한다. meetingId={}", MAX_ATTEMPTS, meetingId);
             registry.clear(meetingId);
             return;
         }
@@ -81,7 +81,7 @@ public class RecordingAssemblyRetryScheduler {
             // 경합으로 진행 중 표시가 붙었다 — 어느 쪽이든 이번 주기에 할 일이 없다.
             return;
         }
-        log.info("디스크 용량 부족으로 미뤄둔 조립 재시도 — meetingId={} 시도={}/{}",
+        log.info("실패한 녹음 조립 재시도 — meetingId={} 시도={}/{}",
                 meetingId, retry.attempts(), MAX_ATTEMPTS);
         try {
             recordingAssemblyDispatcher.dispatch(meetingId, retry.lastSegmentSeq(), retry.lastSeq());

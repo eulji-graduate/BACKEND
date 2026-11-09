@@ -7,13 +7,13 @@ import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 
 /* comment.
-    RecordingAssemblyPort의 스텁 구현 — 로컬/테스트 전용(@Profile("!prod")). 운영은
+    RecordingAssemblyPort의 스텁 구현 — 기본/테스트 전용(@Profile("!prod & !local")). 운영은
     RecordingAssemblyS3FfmpegAdapter(ffmpeg·S3 다운로드·duration 복구·parts 삭제 실 구현)가
     대체한다. CapObjectStorageStubAdapter/CapS3ObjectStorageAdapter와 동일한 stub↔실 어댑터
     분리 패턴.
 */
 @Component
-@Profile("!prod")
+@Profile("!prod & !local")
 public class RecordingAssemblyStubAdapter implements RecordingAssemblyPort {
 
     private static final Logger log = LoggerFactory.getLogger(RecordingAssemblyStubAdapter.class);

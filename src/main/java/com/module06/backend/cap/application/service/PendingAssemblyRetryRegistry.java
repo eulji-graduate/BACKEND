@@ -6,7 +6,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import org.springframework.stereotype.Component;
 
 /*
- * 디스크 용량 부족으로 실패한 조립을 "재시도 대기" 상태로 인메모리에 들고 있는다.
+ * 실패한 조립을 "재시도 대기" 상태로 인메모리에 들고 있는다. prod는 디스크 부족, local은 미디어·저장·정리 실패도 등록한다.
  *
  * <h2>왜 DB가 아니라 메모리인가</h2>
  * 이 대기가 버텨야 하는 시간은 "동시에 돌던 다른 조립이 끝날 때까지"뿐이다 — 길어야
@@ -26,7 +26,7 @@ public class PendingAssemblyRetryRegistry {
 
     private final Map<Long, PendingRetry> pending = new ConcurrentHashMap<>();
 
-    // 디스크 부족으로 실패했을 때 기록한다(최초 실패든, 재시도의 실패든 동일하게 이 메서드를 거친다).
+    // 디스크 부족 또는 local 조립 실패를 기록한다(최초 실패든, 재시도의 실패든 동일하게 이 메서드를 거친다).
     // 이미 대기 중이면 시도 횟수만 늘리고 inFlight는 false로 되돌린다 — 이 실패로 이번 시도는 끝났다.
     public void recordFailure(Long meetingId, int lastSegmentSeq, int lastSeq) {
         pending.merge(meetingId, new PendingRetry(1, lastSegmentSeq, lastSeq, false),
