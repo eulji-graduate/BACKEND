@@ -1306,6 +1306,24 @@ class AnalysisOrchestratorTest {
         assertThat(AnalysisOrchestrator.reusedLayersOf(LayerName.L1)).isEmpty();
     }
 
+    @Test
+    void identicalOverlapCopiesAreRemovedBeforePersistenceVerificationAndDistribution() {
+        FakeSummaryRepository summaries = new FakeSummaryRepository();
+        FakeTupleRepository tuples = new FakeTupleRepository();
+        RecordingAiLayerPort ai = confirmingAi();
+        ai.topics = List.of(
+                new TopicSegment(1, "원본 주제", 1L, 1L, List.of(1L)),
+                new TopicSegment(2, "다음 주제", 2L, 2L, List.of(1L, 2L)));
+        ai.tuples = List.of(new AssignmentTuple("로드맵 작성", 42L, AssigneeSource.EXPLICIT_CALL,
+                LocalDate.of(2026, 8, 12), 1L));
+        AnalysisOutcome outcome = orchestrator(summaries, tuples, ai).run(TENANT, COMPANY, MEETING, PARTICIPANTS, false);
+        assertThat(outcome.status()).isEqualTo(AnalysisOutcome.Status.DONE);
+        assertThat(tuples.saved).hasSize(1);
+        assertThat(tuples.saved.get(0).topicSeq()).isEqualTo(1);
+        assertThat(ai.verifyTargets).hasSize(1);
+        assertThat(tuples.distributions).hasSize(1);
+    }
+
     /* 게이트가 전부 CONFIRMED 라 L4 까지 실제로 흐르는 AI 가짜. */
     private static RecordingAiLayerPort confirmingAi() {
         return new RecordingAiLayerPort(
@@ -1439,6 +1457,7 @@ class AnalysisOrchestratorTest {
 
         private static final LayerRun RUN = new LayerRun(100, 20, "gemini-flash", "v1");
 
+        private List<TopicSegment> topics = List.of(new TopicSegment(1, "제품 로드맵", 1L, 2L, List.of(1L, 2L)));
         private final List<com.module06.backend.capture.domain.model.TopicItem> l3Items;
         private final java.util.function.Function<List<Long>, List<GateVerdict>> verdicts;
 
@@ -1507,7 +1526,7 @@ class AnalysisOrchestratorTest {
             segmentCalls++;
             segmentUtterances = List.copyOf(utterances);
             return new SegmentTopicsResult(
-                    List.of(new TopicSegment(1, "제품 로드맵", 1L, 2L, List.of(1L, 2L))), RUN);
+                    topics, RUN);
         }
 
         @Override
