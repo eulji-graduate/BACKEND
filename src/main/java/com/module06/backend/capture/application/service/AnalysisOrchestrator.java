@@ -801,8 +801,10 @@ public class AnalysisOrchestrator {
              * 건너뛰면 지난 실행의 배정이 남아, 이번에 아무것도 확정되지 않은 회의가
              * 예전 배정을 그대로 들고 있게 된다.
              */
-            assignmentTupleRepository.replace(companyId, meetingId, rows);
-            return new Accumulated<>(rows.size(), sink.spent());
+            List<TupleRow> retainedRows = TopicOverlapTupleDeduplicator.deduplicate(
+                    companyId, meetingId, rows, topics, utterances, confirmedBySeq);
+            assignmentTupleRepository.replace(companyId, meetingId, retainedRows);
+            return new Accumulated<>(retainedRows.size(), sink.spent());
         });
         if (!extracted.succeeded()) {
             return extracted.toAnalysisOutcome(LayerName.L4);
