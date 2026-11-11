@@ -161,11 +161,12 @@ public class AiLayerHttpAdapter implements AiLayerPort {
 
     @Override
     public SummarizeTopicResult summarizeTopic(long tenantId, long meetingId, int topicSeq, String topic,
+                                               Long topicStartUtteranceId,
                                                List<Utterance> utterances, List<Participant> participants) {
         SummarizeTopicResponseDto response = post(
                 "/internal/layers/l3/summarize-topic",
                 new SummarizeTopicRequestDto(tenantId, meetingId, topicSeq, topic,
-                        toUtteranceDtos(utterances), toParticipantDtos(participants), null),
+                        toUtteranceDtos(utterances), toParticipantDtos(participants), null, topicStartUtteranceId),
                 SummarizeTopicResponseDto.class);
 
         return new SummarizeTopicResult(

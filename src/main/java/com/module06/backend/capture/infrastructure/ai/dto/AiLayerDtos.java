@@ -2,6 +2,8 @@ package com.module06.backend.capture.infrastructure.ai.dto;
 
 import java.util.List;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
+
 /*
  * Spring ↔ Python 내부 API 의 전송 모양이다.
  *
@@ -117,7 +119,8 @@ public final class AiLayerDtos {
             String topic,
             List<UtteranceDto> utterances,
             List<ParticipantDto> participants,
-            String queryText
+            String queryText,
+            @JsonInclude(JsonInclude.Include.NON_NULL) Long topicStartUtteranceId
     ) {
     }
 

@@ -96,6 +96,21 @@ class AnalysisOrchestratorTest {
             new AiLayerPort.Participant(null, "명단 외"));
 
     @Test
+    void L3에_오버랩을_유지하고_요청에_있는_시작_발화만_경계로_넘긴다() {
+        RecordingAiLayerPort ai = new RecordingAiLayerPort(List.of(), ids -> List.of());
+        ai.topics = List.of(
+                new TopicSegment(1, "유효한 경계", 2L, 2L, List.of(1L, 2L)),
+                new TopicSegment(2, "발화가 없는 경계", 3L, 3L, List.of(2L, 3L)));
+
+        orchestrator(new FakeSummaryRepository(), new FakeTupleRepository(), ai)
+                .run(TENANT, COMPANY, MEETING, PARTICIPANTS, false);
+
+        assertThat(ai.l3Requests).containsExactly(
+                new L3Request(1, 2L, List.of(1L, 2L)),
+                new L3Request(2, null, List.of(2L)));
+    }
+
+    @Test
     @DisplayName("CONFIRMED 항목만 L4 로 넘어간다 — DISCUSSED · 미판정은 제외된다")
     void 게이트를_통과한_항목만_tuple_추출로_넘어간다() {
         // 항목 3건: 하나는 CONFIRMED, 하나는 DISCUSSED, 하나는 게이트가 판정을 못 준 것.
@@ -1431,6 +1446,9 @@ class AnalysisOrchestratorTest {
 
     // ── 가짜 구현 ───────────────────────────────────────────────────────────────
 
+    private record L3Request(int topicSeq, Long topicStartUtteranceId, List<Long> utteranceIds) {
+    }
+
     /*
      * 계층 호출을 기록하는 AiLayerPort. 무엇을 실어 보냈는지가 검증 대상이다 —
      * 게이트를 지나지 않은 항목이 L4 요청에 섞이는지는 요청 본문으로만 확인할 수 있다.
@@ -1439,6 +1457,7 @@ class AnalysisOrchestratorTest {
 
         private static final LayerRun RUN = new LayerRun(100, 20, "gemini-flash", "v1");
 
+        private List<TopicSegment> topics = List.of(new TopicSegment(1, "제품 로드맵", 1L, 2L, List.of(1L, 2L)));
         private final List<com.module06.backend.capture.domain.model.TopicItem> l3Items;
         private final java.util.function.Function<List<Long>, List<GateVerdict>> verdicts;
 
@@ -1453,6 +1472,7 @@ class AnalysisOrchestratorTest {
         private List<Utterance> resolveUtterances = List.of();
         private List<Long> resolveTargets = List.of();
         private List<Utterance> segmentUtterances = List.of();
+        private final List<L3Request> l3Requests = new ArrayList<>();
         private final List<List<GateCandidate>> gateRequests = new ArrayList<>();
         private final List<List<ConfirmedItem>> extractRequests = new ArrayList<>();
         private final List<LocalDate> meetingDates = new ArrayList<>();
@@ -1507,12 +1527,15 @@ class AnalysisOrchestratorTest {
             segmentCalls++;
             segmentUtterances = List.copyOf(utterances);
             return new SegmentTopicsResult(
-                    List.of(new TopicSegment(1, "제품 로드맵", 1L, 2L, List.of(1L, 2L))), RUN);
+                    topics, RUN);
         }
 
         @Override
         public SummarizeTopicResult summarizeTopic(long tenantId, long meetingId, int topicSeq, String topic,
+                                                   Long topicStartUtteranceId,
                                                    List<Utterance> utterances, List<Participant> participants) {
+            l3Requests.add(new L3Request(
+                    topicSeq, topicStartUtteranceId, utterances.stream().map(Utterance::utteranceId).toList()));
             return new SummarizeTopicResult("주제 요약", l3Items, RUN);
         }
 

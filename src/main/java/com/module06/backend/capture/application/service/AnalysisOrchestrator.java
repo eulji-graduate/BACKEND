@@ -580,9 +580,16 @@ public class AnalysisOrchestrator {
              * UsageSink 를 원자적으로 만든 이유가 이것이다 — 여러 스레드가 동시에 더한다.
              */
             List<SummarizeTopicResult> results = inTopicOrder(topics, topic -> {
+                List<Utterance> topicUtterances = utterancesOf(topic, byId);
+                // 실제 요청에 시작 발화가 있을 때만 경계를 전달한다.
+                Long topicStartUtteranceId = topicUtterances.stream()
+                        .map(Utterance::utteranceId)
+                        .filter(id -> id != null && id.equals(topic.startUtteranceId()))
+                        .findFirst()
+                        .orElse(null);
                 SummarizeTopicResult result = aiLayerPort.summarizeTopic(
                         tenantId, meetingId, topic.topicSeq(), topic.topic(),
-                        utterancesOf(topic, byId), participants);
+                        topicStartUtteranceId, topicUtterances, participants);
                 sink.add(result.run());
                 return result;
             });
