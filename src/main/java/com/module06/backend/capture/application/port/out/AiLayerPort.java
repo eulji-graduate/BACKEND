@@ -56,14 +56,15 @@ public interface AiLayerPort {
     /*
      * AI-04 · L3 주제별 정리. 주제마다 한 번씩 부른다(명세 「주제별 N회」).
      *
-     * utterances 는 그 주제의 발화만 넘긴다 — 회의 전체를 넘기면 주제를 나눈 의미가 없고
-     * 토큰만 주제 수만큼 곱해진다.
+     * utterances 에는 앞 주제의 참고 발화가 포함될 수 있다.
+     * topicStartUtteranceId 는 현재 주제의 첫 발화이며, 요청에 그 발화가 없으면 null 이다.
      */
     SummarizeTopicResult summarizeTopic(
             long tenantId,
             long meetingId,
             int topicSeq,
             String topic,
+            Long topicStartUtteranceId,
             List<Utterance> utterances,
             List<Participant> participants
     );
