@@ -1,10 +1,13 @@
--- Local demo only. Apply once to an empty schema, after schema.sql.
+-- Presentation seed. Apply once to an empty schema, after schema.sql.
+-- Meeting 899 supplies project history; meeting 900 is ready for live analysis.
 -- Demo credentials are shared separately. Store only BCrypt hashes in the repository.
 -- No real card keys, recordings or external AI calls are created by this seed.
 SET NAMES utf8mb4;
 SET time_zone = '+09:00';
 SET @today = CURRENT_DATE();
 SET @now = CURRENT_TIMESTAMP();
+SET @demo_start = TIMESTAMP(DATE_SUB(@today, INTERVAL 1 DAY), '10:00:00');
+SET @demo_end = DATE_ADD(@demo_start, INTERVAL 3 MINUTE);
 SET @period_start = CAST(DATE_FORMAT(@today, '%Y-%m-01') AS DATE);
 SET @period_end = DATE_ADD(@period_start, INTERVAL 1 MONTH);
 SET @demo_password_hash = '$2a$10$xMJCuwF1kvn6Ci7xPdT9g.dKuEUw.MHzqqKMts7g8CWH9XlIv.4CG';
@@ -77,47 +80,71 @@ INSERT INTO meeting_room (id, company_id, name, location) VALUES
 (1, 1, '대회의실', '3층 A동'), (2, 1, '소회의실 A', '3층 A동'),
 (3, 1, '소회의실 B', '3층 B동'), (4, 1, '화상회의실', '본관 5층');
 
+-- Prior review, the presentation meeting, and its scheduled follow-up share one project.
 INSERT INTO meeting (id, company_id, project_id, team_id, meeting_room_id, host_member_id,
  title, status, start_at, end_at, recording_consent, started_at, ended_at, actions_confirmed_at) VALUES
-(1, 1, 1, 1, 1, 2, '온보딩 개선 킥오프', 'DONE',
- TIMESTAMP(DATE_SUB(@today, INTERVAL 1 DAY), '10:00:00'),
- TIMESTAMP(DATE_SUB(@today, INTERVAL 1 DAY), '10:30:00'), TRUE,
- TIMESTAMP(DATE_SUB(@today, INTERVAL 1 DAY), '10:00:00'),
- TIMESTAMP(DATE_SUB(@today, INTERVAL 1 DAY), '10:30:00'), @now),
-(2, 1, 1, 1, 1, 2, '온보딩 개선 후속 회의', 'SCHEDULED',
- TIMESTAMP(DATE_ADD(@today, INTERVAL 1 DAY), '10:00:00'),
- TIMESTAMP(DATE_ADD(@today, INTERVAL 1 DAY), '10:30:00'), TRUE, NULL, NULL, NULL);
+(899, 1, 1, NULL, 1, 1, '온보딩 개선 킥오프', 'DONE',
+ DATE_SUB(@demo_start, INTERVAL 14 DAY), DATE_SUB(@demo_end, INTERVAL 14 DAY), TRUE,
+ DATE_SUB(@demo_start, INTERVAL 14 DAY), DATE_SUB(@demo_end, INTERVAL 14 DAY),
+ DATE_SUB(@demo_end, INTERVAL 14 DAY)),
+(900, 1, 1, 1, 1, 2, '온보딩 1차 출시 준비 회의', 'DONE',
+ @demo_start, @demo_end, TRUE, @demo_start, @demo_end, NULL),
+(901, 1, 1, 1, 1, 2, '온보딩 출시 전 점검', 'SCHEDULED',
+ TIMESTAMP(DATE_ADD(@today, INTERVAL 3 DAY), '10:00:00'),
+ TIMESTAMP(DATE_ADD(@today, INTERVAL 3 DAY), '10:30:00'), TRUE, NULL, NULL, NULL);
 INSERT INTO meeting_attendee (meeting_id, member_id) VALUES
-(1, 2), (1, 3), (1, 4), (2, 2), (2, 3), (2, 4);
-INSERT INTO meeting_topic (id, meeting_id, parent_topic_id, topic_type, content, sort_order) VALUES
-(1, 1, NULL, 'MAIN', '온보딩 개선 계획', 0),
-(2, 1, 1, 'SUB', '와이어프레임과 API 문서', 1),
-(3, 2, NULL, 'MAIN', '개선 진행 상황 점검', 0),
-(4, 2, 3, 'SUB', '담당 업무와 차기 일정', 1);
+(899, 1), (899, 2), (899, 3), (899, 4),
+(900, 2), (900, 3), (900, 4), (901, 2), (901, 3), (901, 4);
+INSERT INTO meeting_topic (meeting_id, parent_topic_id, topic_type, content, sort_order) VALUES
+(899, NULL, 'MAIN', '온보딩 개선 계획', 0),
+(900, NULL, 'MAIN', '가입 화면·인증 API 문서·출시 QA', 0),
+(901, NULL, 'MAIN', '시연 전 개선 사항 점검', 0);
 INSERT INTO meeting_room_slot (meeting_room_id, slot_start, meeting_id)
-VALUES (1, TIMESTAMP(DATE_ADD(@today, INTERVAL 1 DAY), '10:00:00'), 2);
+SELECT meeting_room_id, start_at, id FROM meeting WHERE id = 901;
 
--- Pre-written transcript and summary for repeatable demo viewing, not a claim of live AI completion.
+-- Synthetic transcript for live analysis. Results for this meeting are loaded separately if needed.
 INSERT INTO transcript_chunk (id, meeting_id, seq, content, offset_ms, end_offset_ms,
  speaker_member_id, speaker_source) VALUES
-(1, 1, 1, '김서준입니다. 온보딩 플로우 개선을 시작하겠습니다.', 0, 4000, 2, 'SELF_STREAM'),
-(2, 1, 2, '이하윤입니다. 온보딩 와이어프레임을 검토하겠습니다.', 4000, 9000, 3, 'SELF_STREAM'),
-(3, 1, 3, '박도현입니다. 회의록 저장 API를 연동하겠습니다.', 9000, 14000, 4, 'SELF_STREAM');
-INSERT INTO meeting_summary (company_id, meeting_id, overview, model_name, prompt_version)
-VALUES (1, 1, '[사전 작성 시연 데이터] 온보딩 플로우를 개선하고 와이어프레임 검토, API 문서화, 회의록 저장 API 연동을 진행하기로 했다.', 'demo-seed', 'local-v1');
+(90001, 900, 1, '온보딩 개선 1차 결과를 검토하고 이번 주에 넘길 일을 정하겠습니다.', 0, 5500, 2, 'SELF_STREAM'),
+(90002, 900, 2, '가입 뒤 첫 화면까지는 구현됐고, 안내 문구 두 곳이 아직 비어 있습니다.', 6500, 12000, 3, 'SELF_STREAM'),
+(90003, 900, 3, '회의록 링크는 목록에서 열리지만, 권한 오류가 나면 원인을 찾기 어렵습니다.', 13000, 18500, 4, 'SELF_STREAM'),
+(90004, 900, 4, '이번 회의에서는 가입 화면, API 문서, QA 순서로 정리하겠습니다.', 19500, 25000, 2, 'SELF_STREAM'),
+(90005, 900, 5, '가입 화면에는 기업 코드 예시와 오류 문구가 필요합니다.', 26000, 31500, 3, 'SELF_STREAM'),
+(90006, 900, 6, '예시는 한 줄로 넣고, 기존 계정에는 추가 안내를 띄우지 않겠습니다.', 32500, 38000, 2, 'SELF_STREAM'),
+(90007, 900, 7, '기업 코드를 잘못 입력한 경우도 화면에서 바로 확인되면 좋겠습니다.', 39000, 44500, 4, 'SELF_STREAM'),
+(90008, 900, 8, '이하윤님, 가입 화면 안내 문구와 오류 메시지를 정리해 주세요.', 45500, 51000, 2, 'SELF_STREAM'),
+(90009, 900, 9, '네, 기업 코드 예시까지 포함해서 다음 출시 전 점검 회의까지 반영하겠습니다.', 52000, 57500, 3, 'SELF_STREAM'),
+(90010, 900, 10, '다음은 인증 API 문서입니다.', 58500, 64000, 2, 'SELF_STREAM'),
+(90011, 900, 11, '현재 로그인 요청과 세션 만료 응답이 서로 다른 문서에 흩어져 있습니다.', 65000, 70500, 4, 'SELF_STREAM'),
+(90012, 900, 12, '프론트에서는 정상 응답과 401 응답 예시가 같이 있으면 바로 연동할 수 있습니다.', 71500, 77000, 3, 'SELF_STREAM'),
+(90013, 900, 13, '로그인과 세션 갱신을 한 페이지에 모으겠습니다.', 78000, 83500, 2, 'SELF_STREAM'),
+(90014, 900, 14, '기업 코드가 누락됐을 때의 응답도 같이 적겠습니다.', 84500, 90000, 4, 'SELF_STREAM'),
+(90015, 900, 15, '문서를 본 뒤 오류 문구가 응답과 일치하는지도 확인할게요.', 91000, 96500, 3, 'SELF_STREAM'),
+(90016, 900, 16, '박도현님, 로그인과 세션 갱신의 인증 API 명세를 작성해 주세요.', 97500, 103000, 2, 'SELF_STREAM'),
+(90017, 900, 17, '네, 성공과 실패 응답 예시를 넣어 다음 출시 전 점검 회의까지 공유하겠습니다.', 104000, 109500, 4, 'SELF_STREAM'),
+(90018, 900, 18, '문서 위치는 프로젝트 기획 탭에 링크로 남기겠습니다.', 110500, 116000, 2, 'SELF_STREAM'),
+(90019, 900, 19, '마지막으로 QA에서는 가입 직후부터 첫 프로젝트 화면까지 확인하면 됩니다.', 117000, 122500, 3, 'SELF_STREAM'),
+(90020, 900, 20, '정상 가입뿐 아니라 만료된 세션으로 들어가는 경우도 넣으면 좋겠습니다.', 123500, 129000, 4, 'SELF_STREAM'),
+(90021, 900, 21, '테스트 계정은 대표와 일반 사원 두 가지로 준비하겠습니다.', 130000, 135500, 2, 'SELF_STREAM'),
+(90022, 900, 22, '모바일 화면은 별도 항목으로 남겨 두고 이번 검증은 데스크톱 기준으로 하겠습니다.', 136500, 142000, 3, 'SELF_STREAM'),
+(90023, 900, 23, '오류 재현은 입력값과 기대 화면을 같이 남기면 쉽게 다시 확인할 수 있습니다.', 143000, 148500, 4, 'SELF_STREAM'),
+(90024, 900, 24, '이하윤님, 가입부터 첫 프로젝트 진입까지의 QA 체크리스트를 작성해 주세요.', 149500, 155000, 2, 'SELF_STREAM'),
+(90025, 900, 25, '네, 세션 만료와 기업 코드 오류도 다음 점검 전까지 체크리스트에 포함하겠습니다.', 156000, 161500, 3, 'SELF_STREAM'),
+(90026, 900, 26, '세 작업은 다음 개발팀 회의에서 같이 점검하겠습니다.', 162500, 168000, 2, 'SELF_STREAM'),
+(90027, 900, 27, '확인했습니다. 문서와 화면 링크는 프로젝트에 모아 두겠습니다.', 169000, 174500, 4, 'SELF_STREAM');
 
 INSERT INTO `action` (id, company_id, project_id, parent_action_id, source_meeting_id,
  team_id, assignee_member_id, action_type, title, description, status, due_date,
  review_status, is_manual, confirmed_at, dispatched_at, is_done, start_date, created_at) VALUES
-(201, 1, 1, NULL, 1, 1, NULL, 'TEAM', '온보딩 개선 개발', '개발팀 온보딩 개선 업무', 'IN_PROGRESS',
+(201, 1, 1, NULL, 899, 1, NULL, 'TEAM', '온보딩 개선 개발', '개발팀 온보딩 개선 업무', 'IN_PROGRESS',
  DATE_ADD(@today, INTERVAL 20 DAY), 'HUMAN_CONFIRMED', TRUE, @now, @now, FALSE, DATE_SUB(@today, INTERVAL 2 DAY), DATE_SUB(@now, INTERVAL 3 DAY)),
-(101, 1, 1, 201, 1, NULL, 3, 'PERSONAL', '온보딩 플로우 와이어프레임 검토', '화면 흐름과 입력 항목 검토', 'IN_PROGRESS',
+(101, 1, 1, 201, 899, NULL, 3, 'PERSONAL', '온보딩 플로우 와이어프레임 검토', '화면 흐름과 입력 항목 검토', 'IN_PROGRESS',
  DATE_SUB(@today, INTERVAL 1 DAY), 'HUMAN_CONFIRMED', TRUE, @now, @now, FALSE, DATE_SUB(@today, INTERVAL 3 DAY), DATE_SUB(@now, INTERVAL 4 DAY)),
-(102, 1, 1, 201, 1, NULL, 3, 'PERSONAL', 'API 엔드포인트 문서화', '프론트와 백엔드 요청·응답 계약 정리', 'TODO',
+(102, 1, 1, 201, 899, NULL, 3, 'PERSONAL', 'API 엔드포인트 문서화', '프론트와 백엔드 요청·응답 계약 정리', 'TODO',
  DATE_ADD(@today, INTERVAL 2 DAY), 'HUMAN_CONFIRMED', TRUE, @now, @now, FALSE, NULL, DATE_SUB(@now, INTERVAL 2 DAY)),
-(103, 1, 1, 201, 1, NULL, 3, 'PERSONAL', '스프린트 보드 세팅', '업무 보드 초기 구성', 'DONE',
+(103, 1, 1, 201, 899, NULL, 3, 'PERSONAL', '스프린트 보드 세팅', '업무 보드 초기 구성', 'DONE',
  DATE_SUB(@today, INTERVAL 10 DAY), 'HUMAN_CONFIRMED', TRUE, @now, @now, TRUE, DATE_SUB(@today, INTERVAL 12 DAY), DATE_SUB(@now, INTERVAL 13 DAY)),
-(104, 1, 1, 201, 1, NULL, 4, 'PERSONAL', '회의록 저장 API 연동', '회의 상세 화면 연결', 'TODO',
+(104, 1, 1, 201, 899, NULL, 4, 'PERSONAL', '회의록 저장 API 연동', '회의 상세 화면 연결', 'TODO',
  DATE_ADD(@today, INTERVAL 10 DAY), 'HUMAN_CONFIRMED', TRUE, @now, @now, FALSE, NULL, DATE_SUB(@now, INTERVAL 2 DAY)),
 (105, 1, 2, NULL, NULL, NULL, 8, 'PERSONAL', '캠페인 소재 정리', '소재와 일정 인수인계', 'IN_PROGRESS',
  DATE_ADD(@today, INTERVAL 14 DAY), 'HUMAN_CONFIRMED', TRUE, @now, @now, FALSE, DATE_SUB(@today, INTERVAL 4 DAY), DATE_SUB(@now, INTERVAL 5 DAY));
@@ -126,11 +153,19 @@ INSERT INTO `action` (id, company_id, project_id, parent_action_id, source_meeti
 INSERT INTO `action` (id, company_id, project_id, parent_action_id, source_meeting_id,
  assignee_member_id, action_type, title, description, status, due_date,
  review_status, is_manual, confirmed_at, dispatched_at, is_done, start_date, created_at) VALUES
-(106, 1, 1, 201, 1, 3, 'PERSONAL', '온보딩 QA 체크리스트 작성', '휴직 중 전달할 미완료 QA 업무', 'TODO',
+(106, 1, 1, 201, 899, 3, 'PERSONAL', '온보딩 QA 체크리스트 작성', '휴직 중 전달할 미완료 QA 업무', 'TODO',
  DATE_ADD(@today, INTERVAL 4 DAY), 'HUMAN_CONFIRMED', TRUE, @now, @now, FALSE, NULL, DATE_SUB(@now, INTERVAL 2 DAY)),
 (107, 1, 1, NULL, NULL, 2, 'PERSONAL', '4분기 개발 로드맵 확정', '개발팀 차기 로드맵 검토', 'IN_PROGRESS',
  DATE_ADD(@today, INTERVAL 8 DAY), 'HUMAN_CONFIRMED', TRUE, @now, @now, FALSE,
  DATE_SUB(@today, INTERVAL 2 DAY), DATE_SUB(@now, INTERVAL 3 DAY));
+
+-- The kickoff actions were dispatched together when the previous meeting ended.
+UPDATE `action` a JOIN meeting m ON m.id = a.source_meeting_id
+SET a.created_at = m.ended_at, a.confirmed_at = m.actions_confirmed_at,
+    a.dispatched_at = m.actions_confirmed_at
+WHERE m.id = 899;
+
+UPDATE meeting SET related_action_id = 201 WHERE id IN (900, 901);
 
 INSERT INTO handover (id, writer_member_id, team_id, team_name_snap, handover_type, status,
  leave_start_at, leave_end_at, last_working_day, writer_name_snap, writer_position_snap,
@@ -163,7 +198,7 @@ VALUES (1, 3, '시연 흐름 점검', @today, @today),
        (1, 4, 'API 연동 확인', @today, DATE_ADD(@today, INTERVAL 2 DAY));
 INSERT INTO token_usage_record (company_id, team_id, meeting_id, job_id, input_tokens,
  output_tokens, total_tokens, model, recorded_at)
-VALUES (1, 1, 1, 'local-demo-meeting-1', 12000, 3000, 15000, 'demo-seed', @now);
+VALUES (1, 1, 899, 'local-demo-history-899', 12000, 3000, 15000, 'demo-seed', @now);
 -- Synthetic admin-screen metering fixtures. No corresponding audio/text files are created.
 -- These five projects match the FE demo totals; the two workflow projects stay unmetered.
 INSERT INTO project (id, company_id, tag, name, description, color, status, start_date, due_date, created_by) VALUES
