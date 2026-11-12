@@ -44,6 +44,7 @@ import com.module06.backend.identity.auth.application.service.AuthService;
 import com.module06.backend.identity.auth.application.command.LoginCommand;
 import com.module06.backend.identity.auth.application.port.out.RefreshTokenStore;
 import com.module06.backend.global.security.AuthPrincipal;
+import com.module06.backend.global.security.JwtTokenProvider;
 import com.module06.backend.handover.application.service.HandoverService;
 import com.module06.backend.handover.application.command.ReassignItemCommand;
 import com.module06.backend.handover.domain.model.HandoverStatus;
@@ -91,6 +92,9 @@ class LocalSqlInitializationTest {
 
     @Autowired
     ObjectMapper objectMapper;
+
+    @Autowired
+    JwtTokenProvider jwtTokens;
 
     // 로그인 검증은 실제 MySQL/BCrypt로 하고, 세션 저장만 외부 Redis 없이 격리한다.
     @MockitoBean
@@ -175,6 +179,30 @@ class LocalSqlInitializationTest {
         assertThat(jdbc.queryForList("SELECT CONCAT(name, ':', location) FROM meeting_room", String.class))
                 .containsExactlyInAnyOrder("대회의실:3층 A동", "소회의실 A:3층 A동",
                         "소회의실 B:3층 B동", "화상회의실:본관 5층");
+    }
+
+    @Test
+    void presentationMeetingIsDiscoverableAndReadyForFirstAnalysis() throws Exception {
+        assertThat(jdbc.queryForList("""
+                SELECT u.seq FROM transcript_chunk u
+                JOIN meeting_attendee a ON a.meeting_id = u.meeting_id AND a.member_id = u.speaker_member_id
+                WHERE u.meeting_id = 900 ORDER BY u.seq
+                """, Integer.class)).containsExactlyElementsOf(java.util.stream.IntStream.rangeClosed(1, 27).boxed().toList());
+        for (String query : java.util.List.of(
+                "SELECT COUNT(*) FROM meeting_summary WHERE meeting_id = 900",
+                "SELECT COUNT(*) FROM analysis_layer WHERE meeting_id = 900",
+                "SELECT COUNT(*) FROM `action` WHERE source_meeting_id = 900")) {
+            assertThat(jdbc.queryForObject(query, Integer.class)).isZero();
+        }
+
+        String bearer = "Bearer " + jwtTokens.createAccessToken(new AuthPrincipal(2L, 1L, "LEADER", false, 1L));
+        var response = mockMvc.perform(get("/api/meetings/dashboard")
+                        .param("scope", "team").param("limit", "5").header("Authorization", bearer))
+                .andExpect(status().isOk()).andReturn().getResponse();
+        var meetings = objectMapper.readTree(response.getContentAsString()).path("data").path("meetings");
+        assertThat(meetings).anySatisfy(meeting -> assertThat(meeting.path("meetingId").asLong()).isEqualTo(900L));
+        mockMvc.perform(get("/api/meetings/900/processing-status").header("Authorization", bearer))
+                .andExpect(status().isOk());
     }
 
     @Test
