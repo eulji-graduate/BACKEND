@@ -182,6 +182,21 @@ class LocalSqlInitializationTest {
     }
 
     @Test
+    void ownerDashboardShowsSeededStorageMeetingsWithRoomNames() throws Exception {
+        String bearer = "Bearer " + jwtTokens.createAccessToken(new AuthPrincipal(1L, 1L, "OWNER", false, null));
+        var response = mockMvc.perform(get("/api/meetings/dashboard")
+                        .param("scope", "owner").param("limit", "20").header("Authorization", bearer))
+                .andExpect(status().isOk()).andReturn().getResponse();
+        var meetings = objectMapper.readTree(response.getContentAsString()).path("data").path("meetings");
+        for (long id : new long[]{110, 111, 120, 121, 130, 131, 140, 141, 150, 151}) {
+            assertThat(meetings).anySatisfy(meeting -> {
+                assertThat(meeting.path("meetingId").asLong()).isEqualTo(id);
+                assertThat(meeting.path("room").asText()).isEqualTo("대회의실");
+            });
+        }
+    }
+
+    @Test
     void presentationMeetingIsDiscoverableAndReadyForFirstAnalysis() throws Exception {
         assertThat(jdbc.queryForList("""
                 SELECT u.seq FROM transcript_chunk u
