@@ -23,7 +23,7 @@ import com.module06.backend.capture.application.port.out.SttJobPort;
  * 제공자 콜백(후속)의 몫이고, 그게 없으므로 **재처리한 블록은 QUEUED 로 머문다.** 상태가 안
  * 바뀌는 것이 버그로 보이지 않게 여기 적어 둔다.
  *
- * <h2>이제 @Profile("!prod") 다</h2>
+ * <h2>이제 @Profile("!prod & !local") 다</h2>
  * 운영은 {@link SttTranscribeJobAdapter} 가 대신한다. **실 어댑터가 생기기 전에는 이 애너테이션을
  * 붙이면 안 됐다** — prod 에서 이 빈이 사라지면 SttBlockService·SttBlockCreationService 주입이
  * 실패해 애플리케이션이 부팅되지 않는다. project 도메인이 정확히 그 상태로 prod 전환에서
@@ -31,7 +31,7 @@ import com.module06.backend.capture.application.port.out.SttJobPort;
  */
 @Slf4j
 @Component
-@Profile("!prod")
+@Profile("!prod & !local")
 public class SttJobStubAdapter implements SttJobPort {
 
     @Override

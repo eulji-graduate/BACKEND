@@ -50,3 +50,12 @@ ai:
   base-url: ${AI_BASE_URL:http://localhost:8000}
   # AI 담당자의 서버와 같은 값을 사용한다. 기본 토큰을 코드에 두지 않는다.
   internal-token: ${INTERNAL_TOKEN}
+
+capture:
+  stt:
+    provider: whisper
+    chunk-cut-enabled: false
+    local:
+      model: ${LOCAL_WHISPER_MODEL:}
+      executable: ${LOCAL_WHISPER_PATH:whisper-cli}
+      timeout-seconds: ${LOCAL_STT_TIMEOUT_SECONDS:180}

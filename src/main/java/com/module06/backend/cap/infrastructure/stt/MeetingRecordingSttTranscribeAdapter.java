@@ -28,7 +28,7 @@ import org.springframework.transaction.annotation.Transactional;
     독립된 트랜잭션에 격리해야 STT 실패가 녹음 등록 트랜잭션을 오염시키지 않는다.
 */
 @Component
-@Profile("prod")
+@Profile("prod | local")
 public class MeetingRecordingSttTranscribeAdapter implements MeetingRecordingSttPort {
 
     private final CreateSttBlockPort createSttBlockPort;

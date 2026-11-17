@@ -93,7 +93,7 @@ public class LocalRecordingAssemblyAdapter implements RecordingAssemblyPort {
             try (InputStream input=Files.newInputStream(output.file())) { files.store(key,input,size); }
             published=key;
             commit.commit(company,Recording.registerWithDuration(meetingId,"recording.ogg",key,size,
-                    output.durationSeconds(),false),lastSegment,lastSeq);
+                    output.durationSeconds(),true),lastSegment,lastSeq);
             committed=true;
             cleanup(meetingId,company,snapshot);
             retries.clear(meetingId);

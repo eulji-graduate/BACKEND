@@ -24,8 +24,8 @@ MySQL·Redis는 루트 `compose.yml`로 실행한다. 비어 있는 MySQL 볼륨
 - CORS는 기본적으로 `http://localhost:3000`, `http://127.0.0.1:3000`을 허용한다.
   백엔드는 루프백 주소에서만 수신한다.
 - `local`의 녹음과 프로젝트 첨부파일은 로컬 디스크에 실제 저장한다.
-  녹음 조립은 ffmpeg·ffprobe를 사용한다. STT는 별도 연동이 필요하며 로컬 스텁만으로
-  실제 전사가 완료되지는 않는다. 기본/테스트 프로파일의 저장소 스텁과 prod S3는 유지한다.
+  녹음 조립은 ffmpeg·ffprobe를 사용한다. 수동 업로드·앱 녹음 조립본의 로컬 전사는 ffmpeg와 whisper.cpp를 사용한다.
+  기본/테스트 프로파일의 저장소 스텁과 prod S3는 유지한다.
 
 ### MySQL·Redis 실행
 
@@ -364,7 +364,26 @@ PUT URL은 15분, 재생 URL은 3시간 유효하다. 파일 키·메서드·만
 - 400 CAP-029: 잘못된 경로. 400 CAP-030: 전송 길이 불일치. 413 CAP-024: 빈 파일·용량 상한 초과.
 - 유효하지 않은 Range는 416, 삭제되었거나 없는 파일은 404다.
 
-수동 녹음·청크 저장·조립은 로컬에서 지원한다. 온디바이스 STT, AI 분석, 프로젝트 첨부파일은 별도 작업이다.
+## 로컬 녹음 전사
+
+시연 노트북에 ffmpeg, [whisper.cpp의 `whisper-cli`](https://github.com/ggml-org/whisper.cpp#quick-start),
+한국어를 지원하는 다국어 모델(예를 들어 `ggml-base.bin`)을 준비한다. 실행 파일과 모델 경로를 지정한다.
+
+```bash
+LOCAL_FFMPEG_PATH=/absolute/path/to/ffmpeg \
+LOCAL_WHISPER_PATH=/absolute/path/to/whisper-cli \
+LOCAL_WHISPER_MODEL=/absolute/path/to/ggml-base.bin \
+./gradlew bootRun --args='--spring.profiles.active=local'
+```
+
+앱에서 녹음하고 회의를 종료하면 서버가 청크를 OGG 파일로 조립한 뒤 통파일 전사를 대기열에 넣는다.
+수동 녹음 업로드도 등록을 완료하면 같은 대기열을 사용한다. 전사에 AWS나 AI-PYTHON 연결은 필요 없다.
+회의 요약·액션 분석까지 시연할 때는 전사가 끝나기 전에 AI-PYTHON을 실행하고 백엔드와 연결한다.
+전사는 회의 종료 후 시작되므로 회의 중 실시간 자막은 제공하지 않는다. Whisper 결과에는 화자 ID가 없다.
+대면 회의는 기존 자동 분석 정책에 따라 3분 이상이면 자동으로 요약한다. 3분 미만은 전사 완료 후 수동 분석을 실행한다.
+
+모델이 빠졌을 때 전사 블록에 `LOCAL_STT_MODEL_MISSING`이 기록된다. 실행 파일·입력 파일·처리 오류는
+`LOCAL_STT_FAILED`로 기록되고 원인은 백엔드 로그에서 확인할 수 있다. `LOCAL_STT_TIMEOUT_SECONDS` 기본값은 180초이며 각 실행 파일에 적용된다.
 
 
 ## 로컬 녹음 자동 조립
@@ -409,7 +428,7 @@ CI의 호스트 도구 설치 여부에 영향을 받지 않게 했다. 이 검�
   메타 등록 후 정리만 실패한 상태에서 재시작했다면 원본 잔여 파일을 보존하며, 전체 녹음 삭제로 정리할 수 있다.
 
 완성본은 기존 서명 URL·Range 재생·개별/프로젝트 저장소 삭제와 같은 파일 루트를 사용한다.
-이 단계는 재생용 조립이며 STT 블록 오디오 조립·온디바이스 STT·AI 분석을 새로 연결하지 않는다.
+조립된 파일은 재생과 회의 종료 후 로컬 전사에 사용한다.
 
 
 ### 프로젝트 첨부파일 실제 저장 (`local`)
