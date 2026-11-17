@@ -9,6 +9,9 @@ import com.module06.backend.cap.application.port.out.LocalAssemblyCommitPort;
 import com.module06.backend.cap.domain.exception.CapErrorCode;
 import com.module06.backend.cap.domain.model.Recording;
 import com.module06.backend.cap.domain.repository.RecordingRepository;
+import com.module06.backend.cap.infrastructure.persistence.SpringDataCapSttBlockReferenceRepository;
+import com.module06.backend.capture.application.port.in.CreateSttBlockPort;
+import com.module06.backend.capture.application.port.in.CreateSttBlockPort.CreateSttBlockCommand;
 import com.module06.backend.global.exception.BusinessException;
 
 @Component
@@ -16,9 +19,16 @@ import com.module06.backend.global.exception.BusinessException;
 public class LocalAssemblyCommitAdapter implements LocalAssemblyCommitPort {
     private final JdbcTemplate jdbc;
     private final RecordingRepository recordings;
-    public LocalAssemblyCommitAdapter(JdbcTemplate jdbc, RecordingRepository recordings) {
+    private final CreateSttBlockPort createSttBlock;
+    private final SpringDataCapSttBlockReferenceRepository sttBlocks;
+
+    public LocalAssemblyCommitAdapter(JdbcTemplate jdbc, RecordingRepository recordings,
+                                      CreateSttBlockPort createSttBlock,
+                                      SpringDataCapSttBlockReferenceRepository sttBlocks) {
         this.jdbc = jdbc;
         this.recordings = recordings;
+        this.createSttBlock = createSttBlock;
+        this.sttBlocks = sttBlocks;
     }
     @Override
     @Transactional
@@ -46,6 +56,12 @@ public class LocalAssemblyCommitAdapter implements LocalAssemblyCommitPort {
             throw new BusinessException(CapErrorCode.CAP_ASSEMBLY_INCOMPLETE);
         }
         recordings.save(recording);
+        // Older meetings may already have chunk blocks. Keep those to avoid duplicate transcripts.
+        if (!sttBlocks.existsByMeetingId(recording.getMeetingId())) {
+            // Commit the queue entry with the recording so polling can find the final audio.
+            createSttBlock.createAndSubmitBlock(new CreateSttBlockCommand(recording.getMeetingId(), 0, 0,
+                    Math.multiplyExact(recording.getDurationSec(), 1000), "WHOLE_FILE", recording.getFileUrl()));
+        }
         // The usual metering writer uses REQUIRES_NEW. This local commit instead joins the metadata transaction.
         var rows = jdbc.queryForList("SELECT company_id, revision FROM meeting_storage_usage WHERE meeting_id=? FOR UPDATE",
                 recording.getMeetingId());

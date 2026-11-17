@@ -11,21 +11,27 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.jdbc.core.JdbcTemplate;
 import com.module06.backend.cap.application.port.out.LocalAssemblyCommitPort;
+import com.module06.backend.cap.application.service.SttBlockCutTrigger;
 import com.module06.backend.cap.domain.model.Recording;
 import com.module06.backend.cap.domain.model.RecordingPart;
 import com.module06.backend.cap.domain.repository.RecordingPartRepository;
 import com.module06.backend.cap.domain.repository.RecordingRepository;
 import com.module06.backend.global.exception.BusinessException;
+import com.module06.backend.capture.application.port.in.CreateSttBlockPort;
+import com.module06.backend.capture.application.port.in.CreateSttBlockPort.CreateSttBlockCommand;
 
 @SpringBootTest(properties={
     "spring.datasource.url=jdbc:h2:mem:assembly_commit_${random.uuid};MODE=MySQL",
     "spring.datasource.driver-class-name=org.h2.Driver","spring.datasource.username=sa","spring.datasource.password=",
-    "spring.jpa.hibernate.ddl-auto=create-drop","spring.data.redis.password=test","ai.internal-token=test"
+    "spring.jpa.hibernate.ddl-auto=create-drop","spring.data.redis.password=test","ai.internal-token=test",
+    "capture.stt-polling.enabled=false"
 })
 @ActiveProfiles("local")
 class LocalAssemblyCommitIntegrationTest {
     @Autowired JdbcTemplate jdbc;
     @Autowired LocalAssemblyCommitPort commit;
+    @Autowired SttBlockCutTrigger chunkCut;
+    @Autowired CreateSttBlockPort createSttBlock;
     @Autowired RecordingRepository recordings;
     @Autowired RecordingPartRepository parts;
 
@@ -44,18 +50,26 @@ class LocalAssemblyCommitIntegrationTest {
     }
     @AfterEach
     void cleanup() {
-        for (String table:List.of("recording_part","recording","capture_upload_state","meeting_storage_usage","meeting",
+        for (String table:List.of("stt_block","recording_part","recording","capture_upload_state","meeting_storage_usage","meeting",
                 "project","member","role","company")) jdbc.update("DELETE FROM "+table);
     }
     private Recording recording() {
-        return Recording.registerWithDuration(10L,"recording.ogg","recordings/org-1/meeting-10/assembly-test.ogg",456,3,false);
+        return Recording.registerWithDuration(10L,"recording.ogg","recordings/org-1/meeting-10/assembly-test.ogg",456,3,true);
     }
 
     @Test
     void storesMetadataAndAdvancesExistingLedgerRevisionTogether() {
         jdbc.update("INSERT INTO meeting_storage_usage (meeting_id,company_id,project_id,used_bytes,revision,updated_at) "
                 + "VALUES (10,1,20,0,2,CURRENT_TIMESTAMP)");
+        assertThat(chunkCut.finalizeTailBlockOnMeetingCompletion(1L,10L,0,2,0,0)).isTrue();
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM stt_block WHERE meeting_id=10", Integer.class)).isZero();
+
         commit.commit(1L,recording(),0,2);
+        assertThat(jdbc.queryForObject("""
+                SELECT COUNT(*) FROM stt_block
+                WHERE meeting_id=10 AND block_seq=0 AND cut_reason='WHOLE_FILE'
+                  AND provider='whisper' AND status='QUEUED' AND end_offset_ms=3000 AND audio_s3_key=?
+                """, Integer.class, recording().getFileUrl())).isEqualTo(1);
         assertThat(recordings.findByMeetingId(10L).orElseThrow().getSizeBytes()).isEqualTo(456);
         assertThat(jdbc.queryForObject("SELECT used_bytes FROM meeting_storage_usage WHERE meeting_id=10",Long.class)).isEqualTo(456);
         assertThat(jdbc.queryForObject("SELECT revision FROM meeting_storage_usage WHERE meeting_id=10",Long.class)).isEqualTo(3);
@@ -70,6 +84,18 @@ class LocalAssemblyCommitIntegrationTest {
         assertThatThrownBy(() -> commit.commit(1L,recording(),0,2)).isInstanceOf(BusinessException.class);
         assertThat(recordings.findByMeetingId(10L)).isEmpty();
         assertThat(jdbc.queryForObject("SELECT used_bytes FROM meeting_storage_usage WHERE meeting_id=10",Long.class)).isEqualTo(99);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM stt_block WHERE meeting_id=10", Integer.class)).isZero();
+    }
+
+    @Test
+    void preservesAnOlderChunkBlockWhileCommittingPlaybackRecording() {
+        createSttBlock.createAndSubmitBlock(new CreateSttBlockCommand(10L, 0, 0, 3000, "TAIL", "old-chunk.wav"));
+
+        commit.commit(1L, recording(), 0, 2);
+
+        assertThat(recordings.findByMeetingId(10L)).isPresent();
+        assertThat(jdbc.queryForList("SELECT audio_s3_key FROM stt_block WHERE meeting_id=10", String.class))
+                .containsExactly("old-chunk.wav");
     }
 
     @Test

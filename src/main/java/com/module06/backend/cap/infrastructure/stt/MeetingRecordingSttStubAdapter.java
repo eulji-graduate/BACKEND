@@ -7,12 +7,12 @@ import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 
 /* comment.
-    MeetingRecordingSttPort의 스텁 구현 — 로컬/테스트 전용(@Profile("!prod")). 운영은
+    MeetingRecordingSttPort의 스텁 구현 — 기본/테스트 프로파일용이다. local과 prod는
     MeetingRecordingSttTranscribeAdapter(capture의 CreateSttBlockPort 위임)를 쓴다.
     RecordingAssemblyStubAdapter와 동일한 "스텁/실 어댑터" 짝 패턴.
 */
 @Component
-@Profile("!prod")
+@Profile("!prod & !local")
 public class MeetingRecordingSttStubAdapter implements MeetingRecordingSttPort {
 
     private static final Logger log = LoggerFactory.getLogger(MeetingRecordingSttStubAdapter.class);

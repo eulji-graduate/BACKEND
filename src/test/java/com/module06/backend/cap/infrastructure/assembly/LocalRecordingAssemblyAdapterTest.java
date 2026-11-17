@@ -66,7 +66,7 @@ class LocalRecordingAssemblyAdapterTest {
         adapter.startAssembly(10L,1,1);
         assertThat(result.get().getDurationSec()).isEqualTo(2);
         assertThat(files.matches(result.get().getFileUrl(),4)).isTrue();
-        assertThat(result.get().isSttTriggered()).isFalse();
+        assertThat(result.get().isSttTriggered()).isTrue();
         assertThat(rows).isEmpty();
         for (var part:List.of(first,second,later)) assertThat(root.resolve(part.getS3Key())).doesNotExist();
         assertThat(retries.snapshot()).isEmpty();

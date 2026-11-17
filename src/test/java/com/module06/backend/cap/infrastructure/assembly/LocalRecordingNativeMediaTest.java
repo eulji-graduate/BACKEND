@@ -78,6 +78,9 @@ class LocalRecordingNativeMediaTest extends LocalAssemblyCommitIntegrationTest {
         String url=json.readTree(body).path("data").path("url").asString();
         mvc.perform(get(URI.create(url)).header("Range","bytes=0-3"))
                 .andExpect(status().isPartialContent()).andExpect(content().bytes(new byte[]{'O','g','g','S'}));
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM stt_block WHERE meeting_id=10 AND audio_s3_key=?",
+                Integer.class, recording.getFileUrl())).isEqualTo(1);
+        jdbc.update("UPDATE stt_block SET status='DONE' WHERE meeting_id=10");
         mvc.perform(delete("/api/meetings/10/recordings").param("confirm","true").header("Authorization",auth))
                 .andExpect(status().isOk());
         assertThat(finalFile).doesNotExist();

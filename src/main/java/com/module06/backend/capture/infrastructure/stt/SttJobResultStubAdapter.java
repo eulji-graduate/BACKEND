@@ -8,7 +8,8 @@ import lombok.extern.slf4j.Slf4j;
 import com.module06.backend.capture.application.port.out.SttJobResultPort;
 
 /*
- * 로컬·테스트용 결과 조회 스텁이다. 운영은 {@link SttTranscribeResultAdapter} 가 대신한다.
+ * 기본/테스트 프로파일용 결과 조회 스텁이다. local은 {@link LocalWhisperSttAdapter},
+ * prod는 {@link SttTranscribeResultAdapter}를 쓴다.
  *
  * <h2>QUEUED 를 돌려준다 — 완료를 흉내내지 않는다</h2>
  * 가짜 전사를 만들어 COMPLETED 로 답할 수도 있지만 그러면 **로컬에서 지어낸 문장이 정본으로
@@ -18,12 +19,12 @@ import com.module06.backend.capture.application.port.out.SttJobResultPort;
  * QUEUED 를 돌려주면 블록은 QUEUED 에 머문다 — 실 어댑터가 붙기 전과 같은 상태이고,
  * 분석 시작 관문이 그 회의를 정직하게 막는다.
  *
- * 그래서 로컬에서는 워커가 매 주기 이 로그만 남긴다. 시끄러우면
+ * 스텁이 켜진 환경에서는 워커가 매 주기 이 로그만 남긴다. 시끄러우면
  * {@code capture.stt-polling.enabled=false} 로 끈다(SttResultPollingScheduler).
  */
 @Slf4j
 @Component
-@Profile("!prod")
+@Profile("!prod & !local")
 public class SttJobResultStubAdapter implements SttJobResultPort {
 
     @Override

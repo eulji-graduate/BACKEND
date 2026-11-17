@@ -4,6 +4,7 @@ import java.util.Optional;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 
@@ -59,6 +60,9 @@ import com.module06.backend.capture.application.port.in.CreateSttBlockPort.Creat
 @Component
 public class SttBlockCutTrigger {
 
+    @Value("${capture.stt.chunk-cut-enabled:true}")
+    private boolean chunkCutEnabled = true;
+
     private static final Logger log = LoggerFactory.getLogger(SttBlockCutTrigger.class);
 
     // 청크 하나는 15초 — 40개 누적이 곧 10분이다(MAX_SEQ 산정과 같은 물리적 사실).
@@ -94,6 +98,9 @@ public class SttBlockCutTrigger {
      */
     @Async("sttBlockCutTaskExecutor")
     public void triggerIfThresholdReached(Long companyId, Long meetingId) {
+        if (!chunkCutEnabled) {
+            return;
+        }
         // 예약을 잡았지만 아직 못 끝낸 상태인가 — 실패로 빠질 때 예약을 풀어줄지 판단하는 근거다.
         // 예약 전에 실패했으면 풀 것이 없고, 반대로 풀지 않으면 그 회의가 통째로 멈춘다.
         boolean reservationPending = false;
@@ -291,6 +298,9 @@ public class SttBlockCutTrigger {
     private TailFinalizeOutcome finalizeTailBlock(Long companyId, Long meetingId, int segmentSeq,
                                                    int lastSeqInSegment, int blocksFormed, long lastBlockEndOffsetMs,
                                                    String triggerReason) {
+        if (!chunkCutEnabled) {
+            return TailFinalizeOutcome.NO_LEFTOVER;
+        }
         try {
             long endOffsetMs = (long) lastSeqInSegment * CHUNK_DURATION_MS;
             if (endOffsetMs <= lastBlockEndOffsetMs) {

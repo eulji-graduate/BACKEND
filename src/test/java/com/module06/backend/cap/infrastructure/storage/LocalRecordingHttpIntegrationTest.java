@@ -16,10 +16,12 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.context.transaction.AfterTransaction;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.FileSystemUtils;
@@ -36,7 +38,7 @@ import tools.jackson.databind.ObjectMapper;
     "spring.datasource.driver-class-name=org.h2.Driver", "spring.datasource.username=sa", "spring.datasource.password=",
     "spring.jpa.hibernate.ddl-auto=create-drop", "spring.data.redis.password=test",
     "ai.internal-token=test-internal-token", "app.local-storage.base-url=http://localhost:8080",
-    "app.local-storage.max-upload-bytes=32"
+    "app.local-storage.max-upload-bytes=32", "capture.stt-polling.enabled=false"
 })
 @ActiveProfiles("local")
 @AutoConfigureMockMvc
@@ -48,6 +50,12 @@ class LocalRecordingHttpIntegrationTest {
     static void root(DynamicPropertyRegistry registry) { registry.add("app.local-storage.root", ROOT::toString); }
     @AfterAll static void cleanup() throws Exception { FileSystemUtils.deleteRecursively(ROOT); }
     @Autowired MockMvc mvc;
+    @Autowired JdbcTemplate jdbc;
+
+    @AfterTransaction
+    void removeCommittedSttBlocks() {
+        jdbc.update("DELETE FROM stt_block WHERE meeting_id = ?", 10L);
+    }
     @Autowired ObjectMapper json;
     @Autowired JwtTokenProvider tokens;
     @Autowired CapObjectStoragePort storage;
@@ -75,6 +83,10 @@ class LocalRecordingHttpIntegrationTest {
         mvc.perform(put(URI.create(upload.url())).contentType("audio/wav").content(AUDIO))
                 .andExpect(status().isConflict()).andExpect(jsonPath("$.errorCode").value("CAP-027"));
         register(key,AUDIO.length,200);
+        assertThat(jdbc.queryForObject(
+                "SELECT provider FROM stt_block WHERE meeting_id = 10 AND cut_reason = 'WHOLE_FILE' AND status = 'QUEUED'",
+                String.class)).isEqualTo("whisper");
+        jdbc.update("UPDATE stt_block SET status = 'DONE' WHERE meeting_id = 10");
         String url = playback();
         mvc.perform(get(URI.create(url.replace("/meeting-10/", "/meeting-99/"))))
                 .andExpect(status().isForbidden());

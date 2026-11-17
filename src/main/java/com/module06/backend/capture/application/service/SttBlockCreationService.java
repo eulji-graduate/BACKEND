@@ -1,5 +1,6 @@
 package com.module06.backend.capture.application.service;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -29,7 +30,8 @@ import com.module06.backend.capture.application.port.out.SttJobPort.SttJob;
 @RequiredArgsConstructor
 public class SttBlockCreationService implements CreateSttBlockPort {
 
-    private static final String PROVIDER = "aws-transcribe";
+    @Value("${capture.stt.provider:aws-transcribe}")
+    private String provider = "aws-transcribe";
 
     private final SttBlockRepository sttBlockRepository;
     private final SttJobPort sttJobPort;
@@ -45,10 +47,10 @@ public class SttBlockCreationService implements CreateSttBlockPort {
 
         long blockId = sttBlockRepository.createQueued(
                 command.meetingId(), command.blockSeq(), command.startOffsetMs(), command.endOffsetMs(),
-                command.cutReason(), command.audioS3Key(), PROVIDER, jobName);
+                command.cutReason(), command.audioS3Key(), provider, jobName);
 
         String submittedJobName = sttJobPort.submit(new SttJob(
-                command.meetingId(), command.blockSeq(), PROVIDER, jobName,
+                command.meetingId(), command.blockSeq(), provider, jobName,
                 command.audioS3Key(), command.startOffsetMs(), command.endOffsetMs()));
 
         /*
