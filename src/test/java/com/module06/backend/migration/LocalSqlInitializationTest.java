@@ -32,6 +32,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 
 import com.module06.backend.global.exception.BusinessException;
 import com.module06.backend.identity.member.application.usecase.GetMembersUseCase;
@@ -221,6 +222,28 @@ class LocalSqlInitializationTest {
     }
 
     @Test
+    void presentationHistoryExposesMeetingMinutesAndHandoverItems() throws Exception {
+        String owner = "Bearer " + jwtTokens.createAccessToken(new AuthPrincipal(1L, 1L, "OWNER", false, null));
+        for (long meetingId : new long[]{902, 903}) {
+            mockMvc.perform(get("/api/meetings/{id}/summary", meetingId).header("Authorization", owner))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.data.topics[0].items.length()").value(2));
+        }
+        for (var expected : Map.of(303L, "FINALIZED", 304L, "REJECTED").entrySet()) {
+            mockMvc.perform(get("/api/handovers/{id}", expected.getKey()).header("Authorization", owner))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.data.status").value(expected.getValue()))
+                    .andExpect(jsonPath("$.data.items.length()").value(1));
+        }
+        assertThat(jdbc.queryForObject("""
+                SELECT COUNT(*) FROM `action` a
+                JOIN transcript_chunk u ON u.id = a.evidence_transcript_id AND u.meeting_id = a.source_meeting_id
+                JOIN meeting_attendee m ON m.meeting_id = u.meeting_id AND m.member_id = a.assignee_member_id
+                WHERE a.source_meeting_id IN (902, 903) AND a.dispatched_at IS NOT NULL
+                """, Integer.class)).isEqualTo(6);
+    }
+
+    @Test
     void seedsThreeUnfinishedVacationItemsAndRelativeDates() {
         LocalDate initialized = initializedOn();
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM handover_item WHERE handover_id = 301", Integer.class))
@@ -339,12 +362,14 @@ class LocalSqlInitializationTest {
 
     @Test
     @Transactional
-    void offboardingDemoFinalizationRemovesWriterFromMemberList() {
+    void offboardingDemoFinalizationRemovesWriterFromMemberList() throws Exception {
         var owner = new AuthPrincipal(1L, 1L, "OWNER", false, null);
         assertThat(members.getMembers(1L, MemberListFilter.ALL, null, 0, 10).totalElements()).isEqualTo(10);
 
-        assertThat(handovers.finalize(302L, owner, LocalDateTime.now()).getStatus())
-                .isEqualTo(HandoverStatus.FINALIZED);
+        mockMvc.perform(patch("/api/handovers/302/finalize")
+                        .header("Authorization", "Bearer " + jwtTokens.createAccessToken(owner)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("FINALIZED"));
 
         assertThat(members.getMembers(1L, MemberListFilter.ALL, null, 0, 10).totalElements()).isEqualTo(9);
         assertThat(jdbc.queryForObject("SELECT deleted_at IS NOT NULL FROM member WHERE id = 8", Boolean.class))
