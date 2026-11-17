@@ -74,7 +74,7 @@ INSERT INTO project (id, company_id, tag, name, description, color, status, star
 (1, 1, 'ONBOARDING', '온보딩 플로우 개선', '신규 사용자의 온보딩 경험과 회의록 연동 개선', '#6366F1',
  'IN_PROGRESS', DATE_SUB(@today, INTERVAL 30 DAY), DATE_ADD(@today, INTERVAL 30 DAY), 1),
 (2, 1, 'CAMPAIGN', '브랜드 캠페인', '캠페인 소재와 디자인 준비', '#10B981',
- 'TODO', DATE_ADD(@today, INTERVAL 3 DAY), DATE_ADD(@today, INTERVAL 45 DAY), 1);
+ 'IN_PROGRESS', DATE_SUB(@today, INTERVAL 10 DAY), DATE_ADD(@today, INTERVAL 45 DAY), 1);
 INSERT INTO project_team (project_id, team_id) VALUES (1, 1), (1, 3), (2, 2), (2, 3);
 INSERT INTO meeting_room (id, company_id, name, location) VALUES
 (1, 1, '대회의실', '3층 A동'), (2, 1, '소회의실 A', '3층 A동'),
@@ -167,6 +167,84 @@ WHERE m.id = 899;
 
 UPDATE meeting SET related_action_id = 201 WHERE id IN (900, 901);
 
+-- Completed project meetings for browsing minutes and following dispatched work.
+SET @qa_start = TIMESTAMP(DATE_SUB(@today, INTERVAL 5 DAY), '11:00:00');
+SET @campaign_start = TIMESTAMP(DATE_SUB(@today, INTERVAL 7 DAY), '15:00:00');
+INSERT INTO meeting (id, company_id, project_id, team_id, meeting_room_id, host_member_id,
+ title, status, start_at, end_at, started_at, ended_at, actions_confirmed_at) VALUES
+(902, 1, 1, 1, 2, 2, '온보딩 오류 대응 점검', 'DONE', @qa_start,
+ DATE_ADD(@qa_start, INTERVAL 20 MINUTE), @qa_start, DATE_ADD(@qa_start, INTERVAL 18 MINUTE),
+ DATE_ADD(@qa_start, INTERVAL 20 MINUTE)),
+(903, 1, 2, 2, 3, 5, '브랜드 캠페인 소재 검토', 'DONE', @campaign_start,
+ DATE_ADD(@campaign_start, INTERVAL 30 MINUTE), @campaign_start, DATE_ADD(@campaign_start, INTERVAL 25 MINUTE),
+ DATE_ADD(@campaign_start, INTERVAL 30 MINUTE));
+UPDATE meeting SET related_action_id = 201 WHERE id = 902;
+
+INSERT INTO meeting_attendee (meeting_id, member_id) VALUES
+(902, 2), (902, 3), (902, 4), (903, 5), (903, 6), (903, 8), (903, 10);
+
+INSERT INTO meeting_topic (meeting_id, topic_type, content, sort_order) VALUES
+(902, 'MAIN', '기업 코드 오류·세션 갱신·회귀 테스트', 0),
+(903, 'MAIN', '캠페인 배너·카피·공개 전 검수', 0);
+
+INSERT INTO transcript_chunk (id, meeting_id, seq, content, offset_ms, end_offset_ms,
+ speaker_member_id, speaker_source) VALUES
+(90201, 902, 1, '김서준입니다. 기업 코드 오류와 세션 만료 케이스를 점검하겠습니다.', 0, 5000, 2, 'SELF_STREAM'),
+(90202, 902, 2, '이하윤입니다. 기업 코드 오류 안내의 화면 배치를 확인했습니다.', 5500, 10000, 3, 'SELF_STREAM'),
+(90203, 902, 3, '박도현님, 만료된 세션의 재로그인 경로를 점검해 주세요.', 10500, 15500, 2, 'SELF_STREAM'),
+(90204, 902, 4, '박도현입니다. 갱신 실패 응답과 재로그인 화면을 함께 확인하겠습니다.', 16000, 21500, 4, 'SELF_STREAM'),
+(90205, 902, 5, '기업 코드 오류는 재현됐고, 재현 절차를 문서에 남겼습니다.', 22000, 27000, 3, 'SELF_STREAM'),
+(90206, 902, 6, '제가 출시 전에 기업 코드 회귀 테스트 결과를 모으겠습니다.', 27500, 32500, 2, 'SELF_STREAM'),
+(90301, 903, 1, '최유진입니다. 캠페인 첫 화면에 쓸 소재를 결정하겠습니다.', 0, 5000, 5, 'SELF_STREAM'),
+(90302, 903, 2, '정민석입니다. 배너 문구를 모바일에서도 한 줄로 읽히게 줄였습니다.', 5500, 11000, 6, 'SELF_STREAM'),
+(90303, 903, 3, '한소율님, 배너의 모바일용 시안을 만들어 주세요.', 11500, 16000, 5, 'SELF_STREAM'),
+(90304, 903, 4, '한소율입니다. 작은 화면에서 버튼까지 보이도록 작업하겠습니다.', 16500, 21500, 10, 'SELF_STREAM'),
+(90305, 903, 5, '임지안입니다. 캠페인 카피 초안은 공유 폴더에 정리했습니다.', 22000, 27000, 8, 'SELF_STREAM'),
+(90306, 903, 6, '정민석님, 배너 시안이 나오면 문구와 링크를 같이 검수해 주세요.', 27500, 33000, 5, 'SELF_STREAM');
+
+INSERT INTO meeting_summary (company_id, meeting_id, overview, model_name, prompt_version) VALUES
+(1, 902, '[사전 작성 회의록] 기업 코드 오류 재현을 완료했습니다. 세션 만료 후 재로그인과 기업 코드 회귀 테스트를 출시 전에 점검합니다.', 'demo-seed', 'presentation-v2'),
+(1, 903, '[사전 작성 회의록] 한 줄 카피를 기준으로 모바일 배너를 제작하고 공개 전에 문구와 링크를 검수합니다.', 'demo-seed', 'presentation-v2');
+
+INSERT INTO meeting_decision (meeting_summary_id, meeting_id, topic_seq, topic, item_type,
+ content, evidence_transcript_id, gate_status, sort_order)
+SELECT s.id, s.meeting_id, 1, d.topic, 'DECISION', d.content, d.evidence_id, 'CONFIRMED', d.sort_order
+FROM meeting_summary s JOIN (
+    SELECT 902 AS meeting_id, '오류 대응' AS topic, '만료된 세션의 재로그인 경로 점검' AS content, 90203 AS evidence_id, 0 AS sort_order
+    UNION ALL SELECT 902, '오류 대응', '기업 코드 회귀 테스트 결과 취합', 90206, 1
+    UNION ALL SELECT 903, '캠페인 소재', '모바일 배너 시안 제작', 90303, 0
+    UNION ALL SELECT 903, '캠페인 소재', '배너 문구와 링크 검수', 90306, 1
+) d ON d.meeting_id = s.meeting_id;
+
+-- Previously dispatched tasks have different board states and source evidence.
+INSERT INTO `action` (id, company_id, project_id, parent_action_id, source_meeting_id, assignee_member_id,
+ action_type, title, description, status, due_date, review_status, is_manual, confirmed_at, dispatched_at,
+ is_done, start_date, created_at, evidence_transcript_id) VALUES
+(108, 1, 1, 201, 902, 4, 'PERSONAL', '세션 만료 후 재로그인 점검', '갱신 실패 응답과 로그인 화면 이동을 확인합니다.', 'IN_PROGRESS',
+ DATE_ADD(@today, INTERVAL 2 DAY), 'HUMAN_CONFIRMED', TRUE, DATE_ADD(@qa_start, INTERVAL 20 MINUTE),
+ DATE_ADD(@qa_start, INTERVAL 20 MINUTE), FALSE, DATE_SUB(@today, INTERVAL 2 DAY), @qa_start, 90203),
+(109, 1, 1, 201, 902, 3, 'PERSONAL', '기업 코드 오류 재현 기록', '재현 입력과 기대 화면을 QA 문서에 남겼습니다.', 'DONE',
+ DATE_SUB(@today, INTERVAL 2 DAY), 'HUMAN_CONFIRMED', TRUE, DATE_ADD(@qa_start, INTERVAL 20 MINUTE),
+ DATE_ADD(@qa_start, INTERVAL 20 MINUTE), TRUE, DATE_SUB(@today, INTERVAL 4 DAY), @qa_start, 90205),
+(110, 1, 1, 201, 902, 2, 'PERSONAL', '기업 코드 회귀 테스트 취합', '정상 코드와 오입력 케이스의 결과를 정리합니다.', 'TODO',
+ DATE_ADD(@today, INTERVAL 3 DAY), 'HUMAN_CONFIRMED', TRUE, DATE_ADD(@qa_start, INTERVAL 20 MINUTE),
+ DATE_ADD(@qa_start, INTERVAL 20 MINUTE), FALSE, NULL, @qa_start, 90206),
+(111, 1, 2, NULL, 903, 10, 'PERSONAL', '모바일 배너 시안 제작', '작은 화면에서도 문구와 버튼이 표시되도록 시안을 만듭니다.', 'TODO',
+ DATE_ADD(@today, INTERVAL 9 DAY), 'HUMAN_CONFIRMED', TRUE, DATE_ADD(@campaign_start, INTERVAL 30 MINUTE),
+ DATE_ADD(@campaign_start, INTERVAL 30 MINUTE), FALSE, NULL, @campaign_start, 90303),
+(112, 1, 2, NULL, 903, 6, 'PERSONAL', '배너 문구와 링크 검수', '시안을 바탕으로 링크 이동과 카피 줄바꿈을 확인합니다.', 'IN_PROGRESS',
+ DATE_ADD(@today, INTERVAL 12 DAY), 'HUMAN_CONFIRMED', TRUE, DATE_ADD(@campaign_start, INTERVAL 30 MINUTE),
+ DATE_ADD(@campaign_start, INTERVAL 30 MINUTE), FALSE, DATE_SUB(@today, INTERVAL 1 DAY), @campaign_start, 90306),
+(113, 1, 2, NULL, 903, 8, 'PERSONAL', '캠페인 카피 초안 정리', '공유 폴더에 남긴 캠페인 문구 초안입니다.', 'DONE',
+ DATE_SUB(@today, INTERVAL 3 DAY), 'HUMAN_CONFIRMED', TRUE, DATE_ADD(@campaign_start, INTERVAL 30 MINUTE),
+ DATE_ADD(@campaign_start, INTERVAL 30 MINUTE), TRUE, DATE_SUB(@today, INTERVAL 6 DAY), @campaign_start, 90305);
+
+INSERT INTO action_checklist_item (action_id, content, is_done, sort_order) VALUES
+(108, '세션 갱신 실패 응답 확인', TRUE, 0), (108, '재로그인 후 원래 화면 복귀 확인', FALSE, 1),
+(110, '정상 기업 코드로 가입 재현', FALSE, 0), (110, '잘못된 기업 코드의 안내 문구 확인', FALSE, 1),
+(111, '모바일 너비에서 버튼 확인', FALSE, 0), (112, '배너의 연결 주소 확인', TRUE, 0),
+(112, '두 줄 이상으로 넘어가는 문구 확인', FALSE, 1);
+
 INSERT INTO handover (id, writer_member_id, team_id, team_name_snap, handover_type, status,
  leave_start_at, leave_end_at, last_working_day, writer_name_snap, writer_position_snap,
  intermediate_approver_id, intermediate_approver_name_snap, intermediate_approved_at, version, note) VALUES
@@ -192,6 +270,46 @@ INSERT INTO handover_item (handover_id, action_id, action_title_snap, action_sta
 SELECT 302, id, title, status, 'CAMPAIGN', action_type, due_date, description,
  start_date, created_at, TRUE, 6, '정민석', '대리', DATE_SUB(@now, INTERVAL 2 DAY), DATE_SUB(@now, INTERVAL 2 DAY) FROM `action` WHERE id = 105;
 UPDATE `action` SET assignee_member_id = 6, pending_handover_ack = TRUE WHERE id = 105;
+
+-- Offboarding includes completed work as context, with no reassignment required.
+INSERT INTO handover_item (handover_id, action_id, action_title_snap, action_status_snap,
+ project_tag_snap, action_type_snap, deadline_snap, source_meeting_id, source_meeting_title_snap,
+ content_snap, start_date_snap, action_created_at_snap, reassign_required)
+SELECT 302, a.id, a.title, a.status, 'CAMPAIGN', a.action_type, a.due_date, m.id, m.title,
+ a.description, a.start_date, a.created_at, FALSE
+FROM `action` a JOIN meeting m ON m.id = a.source_meeting_id WHERE a.id = 113;
+
+-- Finished and rejected vacation requests provide audit history without changing current member status.
+INSERT INTO handover (id, writer_member_id, team_id, team_name_snap, handover_type, status,
+ leave_start_at, leave_end_at, writer_name_snap, writer_position_snap, intermediate_approver_id,
+ intermediate_approver_name_snap, intermediate_approved_at, final_approver_id, final_approver_name_snap,
+ finalized_at, reject_reason, created_at, updated_at, note) VALUES
+(303, 4, 1, '개발팀', 'VACATION', 'FINALIZED', DATE_SUB(@today, INTERVAL 3 DAY),
+ DATE_SUB(@today, INTERVAL 2 DAY), '박도현', '주임', 2, '김서준', DATE_SUB(@now, INTERVAL 4 DAY),
+ 1, '박대표', DATE_SUB(@now, INTERVAL 4 DAY), NULL, DATE_SUB(@now, INTERVAL 5 DAY),
+ DATE_SUB(@now, INTERVAL 4 DAY), '인증 오류 문의는 휴직 기간 동안 김서준 팀장이 확인합니다.'),
+(304, 6, 2, '마케팅팀', 'VACATION', 'REJECTED', DATE_ADD(@today, INTERVAL 2 DAY),
+ DATE_ADD(@today, INTERVAL 4 DAY), '정민석', '대리', NULL, NULL, NULL, NULL, NULL, NULL,
+ '배너 공개 일정과 겹칩니다. 검수 담당자와 일정을 협의한 뒤 다시 요청해 주세요.',
+ DATE_SUB(@now, INTERVAL 2 DAY), DATE_SUB(@now, INTERVAL 1 DAY), '캠페인 공개 주간 휴직 요청');
+
+INSERT INTO handover_item (handover_id, action_id, action_title_snap, action_status_snap,
+ project_tag_snap, action_type_snap, deadline_snap, source_meeting_id, source_meeting_title_snap,
+ content_snap, parent_action_title_snap, start_date_snap, action_created_at_snap, reassign_required,
+ reassignee_id, reassignee_name_snap, reassignee_position_snap, reassigned_at, committed_at)
+SELECT 303, a.id, a.title, 'TODO', 'ONBOARDING', a.action_type, a.due_date, m.id, m.title,
+ a.description, '온보딩 개선 개발', NULL, a.created_at, TRUE,
+ 2, '김서준', '팀장', h.intermediate_approved_at, h.intermediate_approved_at
+FROM `action` a JOIN meeting m ON m.id = a.source_meeting_id JOIN handover h ON h.id = 303
+WHERE a.id = 108;
+UPDATE `action` SET assignee_member_id = 2, pending_handover_ack = TRUE WHERE id = 108;
+
+INSERT INTO handover_item (handover_id, action_id, action_title_snap, action_status_snap,
+ project_tag_snap, action_type_snap, deadline_snap, source_meeting_id, source_meeting_title_snap,
+ content_snap, start_date_snap, action_created_at_snap, reassign_required)
+SELECT 304, a.id, a.title, 'TODO', 'CAMPAIGN', a.action_type, a.due_date, m.id, m.title,
+ a.description, NULL, a.created_at, TRUE
+FROM `action` a JOIN meeting m ON m.id = a.source_meeting_id WHERE a.id = 112;
 
 INSERT INTO personal_todo (company_id, member_id, title, `date`, end_date)
 VALUES (1, 3, '시연 흐름 점검', @today, @today),
