@@ -34,6 +34,9 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 
+import com.module06.backend.capture.application.port.out.TranscriptRepository;
+import com.module06.backend.capture.application.port.out.CaptionRepository;
+import com.module06.backend.capture.application.service.SpeakerAttributionResolver;
 import com.module06.backend.global.exception.BusinessException;
 import com.module06.backend.identity.member.application.usecase.GetMembersUseCase;
 import com.module06.backend.identity.member.application.dto.MemberListFilter;
@@ -72,6 +75,15 @@ class LocalSqlInitializationTest {
 
     @Autowired
     JdbcTemplate jdbc;
+
+    @Autowired
+    TranscriptRepository transcripts;
+
+    @Autowired
+    CaptionRepository captions;
+
+    @Autowired
+    SpeakerAttributionResolver speakerResolver;
 
     @Autowired
     PasswordEncoder passwordEncoder;
@@ -194,6 +206,30 @@ class LocalSqlInitializationTest {
                 assertThat(meeting.path("meetingId").asLong()).isEqualTo(id);
                 assertThat(meeting.path("room").asText()).isEqualTo("대회의실");
             });
+        }
+    }
+
+    @Test
+    @Transactional
+    void presentationSpeakersSurviveRepeatedL1Attribution() {
+        var seeded = transcripts.findByMeetingOrderByOffset(900);
+        assertThat(seeded).hasSize(27);
+        var expected = seeded.stream().collect(java.util.stream.Collectors.toMap(
+                utterance -> utterance.utteranceId(), utterance -> utterance.speakerMemberId()));
+        var attendeeIds = new java.util.HashSet<>(jdbc.queryForList(
+                "SELECT member_id FROM meeting_attendee WHERE meeting_id=900", Long.class));
+        var names = Map.of(2L, "김서준", 3L, "이하윤", 4L, "박도현");
+        assertThat(captions.findByMeeting(900)).hasSize(27);
+
+        // Force L1 to recover speakers from evidence, then repeat as a reanalysis would.
+        jdbc.update("UPDATE transcript_chunk SET speaker_member_id=NULL, speaker_source=NULL WHERE meeting_id=900");
+        for (int run = 0; run < 2; run++) {
+            var resolved = speakerResolver.resolve(transcripts.findByMeetingOrderByOffset(900),
+                    captions.findByMeeting(900), attendeeIds, names);
+            assertThat(resolved).hasSize(27);
+            assertThat(transcripts.applySpeakerAttributions(900, resolved)).isEqualTo(27);
+            assertThat(transcripts.findByMeetingOrderByOffset(900)).allSatisfy(utterance ->
+                    assertThat(utterance.speakerMemberId()).isEqualTo(expected.get(utterance.utteranceId())));
         }
     }
 
